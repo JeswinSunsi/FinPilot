@@ -1,0 +1,342 @@
+import { computed, ref } from 'vue'
+
+const profiles = {
+  student: {
+    label: 'Student',
+    budgetRatio: 0.65,
+    emergencyTargetMonths: 2,
+    focus: 'Keep fixed costs low and preserve tuition runway.',
+    bucketTemplate: {
+      Food: 0.18,
+      Utilities: 0.1,
+      Housing: 0.34,
+      Transport: 0.08,
+      Health: 0.06,
+      Misc: 0.1,
+      Savings: 0.14,
+    },
+  },
+  professional: {
+    label: 'Professional',
+    budgetRatio: 0.72,
+    emergencyTargetMonths: 4,
+    focus: 'Balance comfort spending with steady long-term savings.',
+    bucketTemplate: {
+      Food: 0.15,
+      Utilities: 0.09,
+      Housing: 0.32,
+      Transport: 0.1,
+      Health: 0.08,
+      Misc: 0.1,
+      Savings: 0.16,
+    },
+  },
+  advisor: {
+    label: 'Advisor',
+    budgetRatio: 0.68,
+    emergencyTargetMonths: 6,
+    focus: 'Track risk-adjusted cash behavior and optimize reserves.',
+    bucketTemplate: {
+      Food: 0.14,
+      Utilities: 0.1,
+      Housing: 0.3,
+      Transport: 0.08,
+      Health: 0.08,
+      Misc: 0.1,
+      Savings: 0.2,
+    },
+  },
+}
+
+const selectedProfile = ref('professional')
+
+const transactions = ref([
+  { id: 1, date: '2026-01-04', description: 'Payroll Deposit', amount: 5400, direction: 'in' },
+  { id: 2, date: '2026-01-06', description: 'Rent Transfer', amount: 1720, direction: 'out' },
+  { id: 3, date: '2026-01-08', description: 'Metro Card Reload', amount: 78, direction: 'out' },
+  { id: 4, date: '2026-01-10', description: 'Grocery Market', amount: 210, direction: 'out' },
+  { id: 5, date: '2026-01-14', description: 'Video Streaming', amount: 16, direction: 'out' },
+  { id: 6, date: '2026-02-04', description: 'Payroll Deposit', amount: 5400, direction: 'in' },
+  { id: 7, date: '2026-02-07', description: 'Coffee and Lunch', amount: 96, direction: 'out' },
+  { id: 8, date: '2026-02-09', description: 'Utilities Electricity', amount: 124, direction: 'out' },
+  { id: 9, date: '2026-02-11', description: 'Online Shopping', amount: 340, direction: 'out' },
+  { id: 10, date: '2026-02-19', description: 'Freelance Invoice', amount: 850, direction: 'in' },
+  { id: 11, date: '2026-03-03', description: 'Payroll Deposit', amount: 5400, direction: 'in' },
+  { id: 12, date: '2026-03-05', description: 'Gym Membership', amount: 52, direction: 'out' },
+  { id: 13, date: '2026-03-07', description: 'Pharmacy Purchase', amount: 45, direction: 'out' },
+  { id: 14, date: '2026-03-10', description: 'Dining and Takeout', amount: 240, direction: 'out' },
+  { id: 15, date: '2026-03-14', description: 'Travel Booking', amount: 460, direction: 'out' },
+  { id: 16, date: '2026-03-16', description: 'Home Internet Bill', amount: 88, direction: 'out' },
+  { id: 17, date: '2026-03-17', description: 'Bookstore', amount: 64, direction: 'out' },
+])
+
+const categoryRules = {
+  Housing: ['rent', 'mortgage', 'lease', 'apartment'],
+  Transport: ['metro', 'fuel', 'transport', 'uber', 'taxi', 'bus'],
+  Food: ['grocery', 'lunch', 'coffee', 'dining', 'takeout', 'restaurant'],
+  Utilities: ['electricity', 'water', 'internet', 'utility', 'bill'],
+  Health: ['pharmacy', 'gym', 'doctor', 'clinic', 'hospital'],
+  Lifestyle: ['shopping', 'travel', 'streaming', 'entertainment', 'bookstore'],
+}
+
+const bucketByCategory = {
+  Housing: 'Housing',
+  Transport: 'Transport',
+  Food: 'Food',
+  Utilities: 'Utilities',
+  Health: 'Health',
+  Lifestyle: 'Misc',
+  Other: 'Misc',
+}
+
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(value)
+
+const categorizeTransaction = (tx) => {
+  if (tx.direction === 'in') {
+    return 'Income'
+  }
+
+  const source = tx.description.toLowerCase()
+
+  for (const [category, words] of Object.entries(categoryRules)) {
+    if (words.some((word) => source.includes(word))) {
+      return category
+    }
+  }
+
+  return 'Other'
+}
+
+const profile = computed(() => profiles[selectedProfile.value])
+
+const profiledTransactions = computed(() =>
+  transactions.value.map((tx) => {
+    const category = categorizeTransaction(tx)
+    return {
+      ...tx,
+      category,
+      bucket: tx.direction === 'in' ? 'Income' : bucketByCategory[category] ?? 'Misc',
+    }
+  }),
+)
+
+const totalIncome = computed(() =>
+  profiledTransactions.value
+    .filter((tx) => tx.direction === 'in')
+    .reduce((sum, tx) => sum + tx.amount, 0),
+)
+
+const totalExpenses = computed(() =>
+  profiledTransactions.value
+    .filter((tx) => tx.direction === 'out')
+    .reduce((sum, tx) => sum + tx.amount, 0),
+)
+
+const budgetLimit = computed(() => totalIncome.value * profile.value.budgetRatio)
+const netFlow = computed(() => totalIncome.value - totalExpenses.value)
+const savingsRate = computed(() => (totalIncome.value > 0 ? (netFlow.value / totalIncome.value) * 100 : 0))
+const budgetUsedPercent = computed(() =>
+  budgetLimit.value > 0 ? Math.min((totalExpenses.value / budgetLimit.value) * 100, 100) : 0,
+)
+
+const monthlyTrend = computed(() => {
+  const map = new Map()
+
+  for (const tx of profiledTransactions.value) {
+    const monthKey = tx.date.slice(0, 7)
+    const monthLabel = new Date(`${monthKey}-01`).toLocaleDateString('en-US', { month: 'short' })
+    const bucket = map.get(monthKey) ?? { label: monthLabel, income: 0, expenses: 0 }
+
+    if (tx.direction === 'in') bucket.income += tx.amount
+    else bucket.expenses += tx.amount
+
+    map.set(monthKey, bucket)
+  }
+
+  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value)
+})
+
+const maxTrendValue = computed(() =>
+  Math.max(...monthlyTrend.value.map((item) => Math.max(item.income, item.expenses)), 1),
+)
+
+const categorySummary = computed(() => {
+  const grouped = {}
+
+  for (const tx of profiledTransactions.value.filter((item) => item.direction === 'out')) {
+    grouped[tx.category] = (grouped[tx.category] ?? 0) + tx.amount
+  }
+
+  return Object.entries(grouped)
+    .map(([name, amount]) => ({
+      name,
+      amount,
+      percent: totalExpenses.value > 0 ? (amount / totalExpenses.value) * 100 : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount)
+})
+
+const bucketAllocation = computed(() => {
+  const template = profile.value.bucketTemplate
+
+  return Object.entries(template).map(([name, ratio]) => {
+    const allocated = totalIncome.value * ratio
+    const spent = profiledTransactions.value
+      .filter((tx) => tx.direction === 'out' && tx.bucket === name)
+      .reduce((sum, tx) => sum + tx.amount, 0)
+
+    return {
+      name,
+      allocated,
+      spent,
+      remaining: allocated - spent,
+      utilization: allocated > 0 ? (spent / allocated) * 100 : 0,
+    }
+  })
+})
+
+const emergencyFundMonths = computed(() => {
+  const monthlyBase = Math.max(totalExpenses.value / 3, 1)
+  return netFlow.value > 0 ? (netFlow.value * 3) / monthlyBase : 0
+})
+
+const riskSignals = computed(() => {
+  const discretionary = bucketAllocation.value
+    .filter((item) => ['Food', 'Misc'].includes(item.name))
+    .reduce((sum, item) => sum + item.spent, 0)
+
+  return {
+    overspending: totalExpenses.value > budgetLimit.value,
+    discretionarySpike: totalExpenses.value > 0 ? discretionary / totalExpenses.value > 0.4 : false,
+    weakReserve: emergencyFundMonths.value < profile.value.emergencyTargetMonths,
+    bucketPressure: bucketAllocation.value.some((item) => item.utilization > 100),
+  }
+})
+
+const financialHealthScore = computed(() => {
+  let score = 90
+
+  if (riskSignals.value.overspending) score -= 25
+  if (riskSignals.value.discretionarySpike) score -= 12
+  if (riskSignals.value.weakReserve) score -= 18
+  if (riskSignals.value.bucketPressure) score -= 10
+  if (savingsRate.value >= 20) score += 6
+
+  return Math.min(Math.max(score, 30), 99)
+})
+
+const recommendations = computed(() => {
+  const notes = []
+
+  if (riskSignals.value.bucketPressure) {
+    notes.push({
+      title: 'Rebalance bucket allocations',
+      priority: 'High',
+      detail: 'One or more spending buckets are over capacity. Shift discretionary spend to stay inside each envelope.',
+    })
+  }
+
+  if (riskSignals.value.overspending) {
+    notes.push({
+      title: 'Enforce budget guardrail',
+      priority: 'High',
+      detail: `Expenses exceed budget by ${formatCurrency(totalExpenses.value - budgetLimit.value)}. Freeze optional purchases for the next 10 days.`,
+    })
+  }
+
+  if (riskSignals.value.weakReserve) {
+    notes.push({
+      title: 'Increase emergency reserve pace',
+      priority: 'Medium',
+      detail: `Current reserve runway is ${emergencyFundMonths.value.toFixed(1)} months. Target ${profile.value.emergencyTargetMonths} months with scheduled transfers.`,
+    })
+  }
+
+  notes.push({
+    title: 'Activate auto-segregation transfers',
+    priority: 'Low',
+    detail: 'Move income into Food, Utilities, Housing, Transport, Health, Misc, and Savings buckets immediately on deposit.',
+  })
+
+  return notes
+})
+
+const opportunities = computed(() => [
+  {
+    title: 'Food bucket optimization',
+    value: formatCurrency(
+      (bucketAllocation.value.find((item) => item.name === 'Food')?.spent ?? 0) * 0.14,
+    ),
+    detail: 'Reduce meal delivery and subscription snack orders.',
+  },
+  {
+    title: 'Utilities efficiency',
+    value: formatCurrency(
+      (bucketAllocation.value.find((item) => item.name === 'Utilities')?.spent ?? 0) * 0.1,
+    ),
+    detail: 'Lower recurring utility bills through usage caps and plan comparisons.',
+  },
+  {
+    title: 'Automatic savings sweep',
+    value: formatCurrency(Math.max(netFlow.value * 0.35, 0)),
+    detail: 'Daily sweep from checking to savings when balance exceeds threshold.',
+  },
+])
+
+const benefitPoints = [
+  'Encourages responsible habits through automatic bucket limits and alerts.',
+  'Improves financial awareness with real-time categorization and spending trend intelligence.',
+  'Supports planning with risk scoring, opportunity forecasting, and guided recommendations.',
+]
+
+const categoryColor = {
+  Housing: 'bg-slate-700',
+  Transport: 'bg-cyan-600',
+  Food: 'bg-amber-500',
+  Utilities: 'bg-blue-600',
+  Health: 'bg-emerald-600',
+  Lifestyle: 'bg-rose-500',
+  Other: 'bg-violet-500',
+}
+
+const bucketColor = {
+  Food: 'bg-amber-500',
+  Utilities: 'bg-blue-600',
+  Housing: 'bg-slate-700',
+  Transport: 'bg-cyan-600',
+  Health: 'bg-emerald-600',
+  Misc: 'bg-fuchsia-500',
+  Savings: 'bg-lime-600',
+}
+
+export const useFinanceData = () => ({
+  profiles,
+  selectedProfile,
+  profile,
+  transactions,
+  profiledTransactions,
+  totalIncome,
+  totalExpenses,
+  budgetLimit,
+  budgetUsedPercent,
+  netFlow,
+  savingsRate,
+  monthlyTrend,
+  maxTrendValue,
+  categorySummary,
+  bucketAllocation,
+  emergencyFundMonths,
+  riskSignals,
+  financialHealthScore,
+  recommendations,
+  opportunities,
+  benefitPoints,
+  categoryColor,
+  bucketColor,
+  formatCurrency,
+})
