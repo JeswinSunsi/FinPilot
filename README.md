@@ -37,6 +37,27 @@ npm run dev
 npm run build
 ```
 
+## PWA Support
+
+The frontend is configured as a Progressive Web App via `vite-plugin-pwa`.
+
+- Build generates a service worker and web manifest automatically.
+- Install prompts are available on supported desktop and mobile browsers.
+- App icons live in `public/pwa-192x192.png`, `public/pwa-512x512.png`, and `public/apple-touch-icon.png`.
+
+To verify locally:
+
+```sh
+npm run build
+npm run preview
+```
+
+Then open DevTools -> Application and confirm:
+
+- Manifest is valid.
+- Service Worker is active.
+- Installability checks pass.
+
 ## Backend Setup (FastAPI + Groq Vision)
 
 The backend code lives in `app` and powers the live SMS simulator plus receipt photo analysis.

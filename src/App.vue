@@ -1,9 +1,11 @@
 <script setup>
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import useFinanceData from './composables/useFinanceData'
 
 const route = useRoute()
-const { toasts, dismissToast } = useFinanceData()
+const router = useRouter()
+const { toasts, dismissToast, currentUser, logoutUser } = useFinanceData()
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>' },
@@ -30,23 +32,93 @@ const toastIcon = (severity) =>
   severity === 'severe'
     ? '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>'
     : '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+
+const deferredInstallPrompt = ref(null)
+const canInstallPwa = ref(false)
+
+const isAuthRoute = computed(() => route.name === 'auth')
+const userInitials = computed(() => {
+  const first = currentUser.value?.firstName?.[0] ?? ''
+  const last = currentUser.value?.lastName?.[0] ?? ''
+  return `${first}${last}`.toUpperCase() || 'FP'
+})
+
+const displayName = computed(() => currentUser.value?.firstName ?? 'there')
+
+const handleLogout = async () => {
+  logoutUser()
+  await router.push({ name: 'auth' })
+}
+
+const onBeforeInstallPrompt = (event) => {
+  event.preventDefault()
+  deferredInstallPrompt.value = event
+  canInstallPwa.value = true
+}
+
+const onAppInstalled = () => {
+  deferredInstallPrompt.value = null
+  canInstallPwa.value = false
+}
+
+const promptInstall = async () => {
+  if (!deferredInstallPrompt.value) {
+    return
+  }
+
+  deferredInstallPrompt.value.prompt()
+  await deferredInstallPrompt.value.userChoice
+
+  deferredInstallPrompt.value = null
+  canInstallPwa.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+  window.addEventListener('appinstalled', onAppInstalled)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+  window.removeEventListener('appinstalled', onAppInstalled)
+})
 </script>
 
 <template>
-  <div class="relative mx-auto min-h-screen w-full max-w-md overflow-hidden bg-slate-50 pb-20 shadow-2xl sm:border-x sm:border-slate-200">
-    <header class="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-4 pt-8 backdrop-blur-md">
+  <div
+    class="relative mx-auto min-h-screen w-full max-w-md overflow-hidden bg-slate-50 shadow-2xl sm:border-x sm:border-slate-200"
+    :class="isAuthRoute ? 'pb-0' : 'pb-20'"
+  >
+    <header v-if="!isAuthRoute" class="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-4 pt-8 backdrop-blur-md">
       <div class="flex items-center justify-between">
         <div>
           <h1 class="font-display text-xl font-bold tracking-tight text-slate-900">FinPilot</h1>
-          <p class="text-xs font-medium text-slate-500">Good Morning</p>
+          <p class="text-xs font-medium text-slate-500">Good Morning, {{ displayName }}</p>
         </div>
-        <div class="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-600 shadow-sm ring-1 ring-slate-200">
-          <span class="text-sm font-bold">FP</span>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 transition hover:bg-slate-100"
+            @click="handleLogout"
+          >
+            Sign out
+          </button>
+          <div class="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-600 shadow-sm ring-1 ring-slate-200">
+            <span class="text-sm font-bold">{{ userInitials }}</span>
+          </div>
         </div>
       </div>
+      <button
+        v-if="canInstallPwa"
+        type="button"
+        class="mt-3 inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[11px] font-semibold text-cyan-700 transition hover:bg-cyan-100"
+        @click="promptInstall"
+      >
+        Install app
+      </button>
     </header>
 
-    <div class="pointer-events-none fixed left-1/2 top-24 z-40 w-full max-w-md -translate-x-1/2 px-4">
+    <div v-if="!isAuthRoute" class="pointer-events-none fixed left-1/2 top-24 z-40 w-full max-w-md -translate-x-1/2 px-4">
       <TransitionGroup name="toast" tag="div" class="flex flex-col gap-2">
         <article
           v-for="toast in toasts"
@@ -83,7 +155,10 @@ const toastIcon = (severity) =>
 
     <RouterView />
 
-    <nav class="fixed bottom-0 z-30 flex w-full max-w-md items-center justify-around border-t border-slate-200 bg-white pb-safe pt-2 sm:px-0 px-2 pb-6">
+    <nav
+      v-if="!isAuthRoute"
+      class="fixed bottom-0 z-30 flex w-full max-w-md items-center justify-around border-t border-slate-200 bg-white pb-safe pt-2 sm:px-0 px-2 pb-6"
+    >
       <RouterLink
         v-for="item in navItems"
         :key="item.path"

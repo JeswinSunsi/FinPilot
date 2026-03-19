@@ -50,6 +50,278 @@ const profiles = {
 
 const selectedProfile = ref('professional')
 
+const AUTH_USERS_STORAGE_KEY = 'finance:auth-users'
+const AUTH_CURRENT_USER_STORAGE_KEY = 'finance:auth-current-user-id'
+
+const users = ref([])
+const currentUser = ref(null)
+
+const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase()
+
+const createAccountId = () => `account-${Date.now()}-${Math.floor(Math.random() * 100000)}`
+
+const normalizeAccountEntry = (account, index = 0) => {
+  const last4 = String(account?.last4 ?? '').replace(/\D/g, '').slice(-4)
+  return {
+    id: String(account?.id ?? createAccountId()),
+    nickname: String(account?.nickname ?? `Account ${index + 1}`).trim() || `Account ${index + 1}`,
+    last4,
+    isPrimary: Boolean(account?.isPrimary),
+  }
+}
+
+const ensurePrimaryAccount = (accounts) => {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return []
+  }
+
+  const cloned = accounts.map((account, index) => normalizeAccountEntry(account, index))
+  const primary = cloned.find((account) => account.isPrimary)
+
+  if (!primary) {
+    cloned[0].isPrimary = true
+    return cloned
+  }
+
+  return cloned.map((account) => ({
+    ...account,
+    isPrimary: account.id === primary.id,
+  }))
+}
+
+const publicUser = (userRecord) => {
+  if (!userRecord) {
+    return null
+  }
+
+  return {
+    id: userRecord.id,
+    firstName: userRecord.firstName,
+    lastName: userRecord.lastName,
+    fullName: `${userRecord.firstName} ${userRecord.lastName}`.trim(),
+    email: userRecord.email,
+    phone: userRecord.phone,
+    accounts: ensurePrimaryAccount(userRecord.accounts),
+    createdAt: userRecord.createdAt,
+  }
+}
+
+const persistUsers = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(AUTH_USERS_STORAGE_KEY, JSON.stringify(users.value))
+}
+
+const persistCurrentUser = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  if (!currentUser.value?.id) {
+    window.localStorage.removeItem(AUTH_CURRENT_USER_STORAGE_KEY)
+    return
+  }
+
+  window.localStorage.setItem(AUTH_CURRENT_USER_STORAGE_KEY, currentUser.value.id)
+}
+
+const hydrateAuthState = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    const rawUsers = window.localStorage.getItem(AUTH_USERS_STORAGE_KEY)
+    const parsedUsers = rawUsers ? JSON.parse(rawUsers) : []
+    users.value = Array.isArray(parsedUsers)
+      ? parsedUsers.map((record) => ({
+          ...record,
+          email: normalizeEmail(record.email),
+          accounts: ensurePrimaryAccount(record.accounts ?? []),
+        }))
+      : []
+  } catch {
+    users.value = []
+  }
+
+  try {
+    const currentUserId = window.localStorage.getItem(AUTH_CURRENT_USER_STORAGE_KEY)
+    const foundUser = users.value.find((record) => record.id === currentUserId)
+    currentUser.value = publicUser(foundUser)
+  } catch {
+    currentUser.value = null
+  }
+}
+
+const isAuthenticated = computed(() => Boolean(currentUser.value?.id))
+
+const registerUser = ({
+  firstName,
+  lastName,
+  email,
+  phone,
+  password,
+  confirmPassword,
+  accounts,
+}) => {
+  const safeFirstName = String(firstName ?? '').trim()
+  const safeLastName = String(lastName ?? '').trim()
+  const safeEmail = normalizeEmail(email)
+  const safePhone = String(phone ?? '').trim()
+  const safePassword = String(password ?? '')
+  const safeConfirmPassword = String(confirmPassword ?? '')
+
+  if (!safeFirstName || !safeLastName) {
+    return { ok: false, error: 'Please provide your first and last name.' }
+  }
+
+  if (!safeEmail || !/^\S+@\S+\.\S+$/.test(safeEmail)) {
+    return { ok: false, error: 'Please provide a valid email address.' }
+  }
+
+  if (safePassword.length < 8) {
+    return { ok: false, error: 'Password must be at least 8 characters long.' }
+  }
+
+  if (safePassword !== safeConfirmPassword) {
+    return { ok: false, error: 'Password confirmation does not match.' }
+  }
+
+  if (users.value.some((record) => record.email === safeEmail)) {
+    return { ok: false, error: 'An account with this email already exists.' }
+  }
+
+  const cleanedAccounts = ensurePrimaryAccount(
+    Array.isArray(accounts)
+      ? accounts
+          .map((account, index) => normalizeAccountEntry(account, index))
+          .filter((account) => account.last4.length === 4)
+      : [],
+  )
+
+  if (cleanedAccounts.length === 0) {
+    return { ok: false, error: 'Add at least one bank account with a valid last 4 digits.' }
+  }
+
+  const userRecord = {
+    id: `user-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+    firstName: safeFirstName,
+    lastName: safeLastName,
+    email: safeEmail,
+    phone: safePhone,
+    password: safePassword,
+    accounts: cleanedAccounts,
+    createdAt: new Date().toISOString(),
+  }
+
+  users.value = [...users.value, userRecord]
+  currentUser.value = publicUser(userRecord)
+  persistUsers()
+  persistCurrentUser()
+
+  return {
+    ok: true,
+    user: currentUser.value,
+  }
+}
+
+const loginUser = ({ email, password }) => {
+  const safeEmail = normalizeEmail(email)
+  const safePassword = String(password ?? '')
+
+  const match = users.value.find(
+    (record) => record.email === safeEmail && record.password === safePassword,
+  )
+
+  if (!match) {
+    return { ok: false, error: 'Invalid email or password.' }
+  }
+
+  currentUser.value = publicUser(match)
+  persistCurrentUser()
+
+  return {
+    ok: true,
+    user: currentUser.value,
+  }
+}
+
+const logoutUser = () => {
+  currentUser.value = null
+  persistCurrentUser()
+}
+
+const addBankAccountForCurrentUser = ({ nickname, last4, setPrimary = false }) => {
+  if (!currentUser.value?.id) {
+    return { ok: false, error: 'No signed-in user.' }
+  }
+
+  const safeLast4 = String(last4 ?? '').replace(/\D/g, '').slice(-4)
+  if (safeLast4.length !== 4) {
+    return { ok: false, error: 'Bank account last 4 digits must contain exactly 4 numbers.' }
+  }
+
+  const account = {
+    id: createAccountId(),
+    nickname: String(nickname ?? '').trim() || `Account ${currentUser.value.accounts.length + 1}`,
+    last4: safeLast4,
+    isPrimary: Boolean(setPrimary),
+  }
+
+  const withNew = ensurePrimaryAccount([
+    ...currentUser.value.accounts.map((entry) => ({ ...entry, isPrimary: setPrimary ? false : entry.isPrimary })),
+    account,
+  ])
+
+  const userIndex = users.value.findIndex((record) => record.id === currentUser.value.id)
+  if (userIndex < 0) {
+    return { ok: false, error: 'Could not update user account list.' }
+  }
+
+  users.value[userIndex] = {
+    ...users.value[userIndex],
+    accounts: withNew,
+  }
+  currentUser.value = publicUser(users.value[userIndex])
+  persistUsers()
+
+  return { ok: true, accounts: withNew }
+}
+
+const setPrimaryBankAccount = (accountId) => {
+  if (!currentUser.value?.id) {
+    return false
+  }
+
+  const userIndex = users.value.findIndex((record) => record.id === currentUser.value.id)
+  if (userIndex < 0) {
+    return false
+  }
+
+  const accounts = users.value[userIndex].accounts ?? []
+  if (!accounts.some((account) => account.id === accountId)) {
+    return false
+  }
+
+  users.value[userIndex] = {
+    ...users.value[userIndex],
+    accounts: ensurePrimaryAccount(
+      accounts.map((account) => ({
+        ...account,
+        isPrimary: account.id === accountId,
+      })),
+    ),
+  }
+
+  currentUser.value = publicUser(users.value[userIndex])
+  persistUsers()
+  return true
+}
+
+hydrateAuthState()
+
 const backendBaseUrl = (import.meta.env.VITE_SMS_BACKEND_BASE_URL ?? 'http://127.0.0.1:8010').replace(
   /\/$/,
   '',
@@ -1109,10 +1381,38 @@ const bucketColor = {
   Savings: 'bg-lime-600',
 }
 
+let realtimeWatcherBound = false
+
+const bindRealtimeWatcher = () => {
+  if (realtimeWatcherBound) {
+    return
+  }
+
+  realtimeWatcherBound = true
+
+  watch(
+    isAuthenticated,
+    (authed) => {
+      if (authed) {
+        ensureRealtimeConnection()
+      }
+    },
+    { immediate: true },
+  )
+}
+
 export const useFinanceData = () => {
-  ensureRealtimeConnection()
+  bindRealtimeWatcher()
 
   return {
+    users,
+    currentUser,
+    isAuthenticated,
+    registerUser,
+    loginUser,
+    logoutUser,
+    addBankAccountForCurrentUser,
+    setPrimaryBankAccount,
     profiles,
     selectedProfile,
     profile,
