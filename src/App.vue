@@ -10,6 +10,17 @@ const {
   dismissToast,
   currentUser,
   logoutUser,
+  realtimeStatus,
+  realtimeError,
+  backendSimulationRunning,
+  backendDebugUrl,
+  backendHealthStatus,
+  backendHealthError,
+  checkBackendHealth,
+  liveMessageCount,
+  lastLiveMessageAt,
+  refreshBackendSimulationStatus,
+  setBackendSimulationState,
 } = useFinanceData()
 
 const navItems = [
@@ -40,6 +51,9 @@ const toastIcon = (severity) =>
 
 const deferredInstallPrompt = ref(null)
 const canInstallPwa = ref(false)
+const debugOverlayMinimized = ref(false)
+let debugRefreshTimer = null
+const showDebugOverlay = String(import.meta.env.VITE_SHOW_DEBUG_OVERLAY ?? '').toLowerCase() === 'true'
 
 const isAuthRoute = computed(() => route.name === 'auth')
 const userInitials = computed(() => {
@@ -49,6 +63,54 @@ const userInitials = computed(() => {
 })
 
 const displayName = computed(() => currentUser.value?.firstName ?? 'there')
+const debugRealtimeTone = computed(() => {
+  if (realtimeStatus.value === 'connected') {
+    return 'bg-emerald-100 text-emerald-700'
+  }
+
+  if (realtimeStatus.value === 'connecting') {
+    return 'bg-amber-100 text-amber-700'
+  }
+
+  return 'bg-rose-100 text-rose-700'
+})
+
+const debugHealthTone = computed(() => {
+  if (backendHealthStatus.value === 'ok') {
+    return 'bg-emerald-100 text-emerald-700'
+  }
+
+  if (backendHealthStatus.value === 'checking') {
+    return 'bg-amber-100 text-amber-700'
+  }
+
+  return 'bg-rose-100 text-rose-700'
+})
+
+const toggleDebugOverlay = () => {
+  debugOverlayMinimized.value = !debugOverlayMinimized.value
+
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(
+      'finance:debug-overlay-minimized',
+      String(debugOverlayMinimized.value),
+    )
+  }
+}
+
+const debugRefresh = async () => {
+  await Promise.allSettled([checkBackendHealth(), refreshBackendSimulationStatus()])
+}
+
+const toggleBackendSimulation = async () => {
+  const nextState = backendSimulationRunning.value ? 'stop' : 'start'
+
+  try {
+    await setBackendSimulationState(nextState)
+  } catch {
+    await refreshBackendSimulationStatus()
+  }
+}
 
 const handleLogout = async () => {
   logoutUser()
@@ -79,13 +141,30 @@ const promptInstall = async () => {
 }
 
 onMounted(() => {
+  try {
+    const persisted = window.localStorage.getItem('finance:debug-overlay-minimized')
+    if (persisted === 'true' || persisted === 'false') {
+      debugOverlayMinimized.value = persisted === 'true'
+    }
+  } catch {
+    debugOverlayMinimized.value = false
+  }
+
   window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
   window.addEventListener('appinstalled', onAppInstalled)
+
+  debugRefresh()
+  debugRefreshTimer = window.setInterval(debugRefresh, 5000)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
   window.removeEventListener('appinstalled', onAppInstalled)
+
+  if (debugRefreshTimer) {
+    window.clearInterval(debugRefreshTimer)
+    debugRefreshTimer = null
+  }
 })
 </script>
 
@@ -159,6 +238,89 @@ onBeforeUnmount(() => {
     </div>
 
     <RouterView />
+
+    <div
+      v-if="!isAuthRoute && showDebugOverlay"
+      class="fixed bottom-24 right-3 z-40 w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-300 bg-slate-900/95 p-3 text-slate-100 shadow-2xl backdrop-blur"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300">Debug Overlay</p>
+          <p class="text-[11px] text-slate-300">Realtime + backend sync state</p>
+        </div>
+        <button
+          type="button"
+          class="rounded-full border border-slate-600 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200 transition hover:bg-slate-800"
+          @click="toggleDebugOverlay"
+        >
+          {{ debugOverlayMinimized ? 'Expand' : 'Minimize' }}
+        </button>
+      </div>
+
+      <div v-if="!debugOverlayMinimized" class="mt-3 space-y-2.5 text-[11px]">
+        <div class="flex items-center justify-between rounded-lg bg-slate-800/90 px-2.5 py-2">
+          <span class="text-slate-300">Realtime</span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase" :class="debugRealtimeTone">
+            {{ realtimeStatus }}
+          </span>
+        </div>
+
+        <div class="flex items-center justify-between rounded-lg bg-slate-800/90 px-2.5 py-2">
+          <span class="text-slate-300">Backend health</span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase" :class="debugHealthTone">
+            {{ backendHealthStatus }}
+          </span>
+        </div>
+
+        <div class="flex items-center justify-between rounded-lg bg-slate-800/90 px-2.5 py-2">
+          <span class="text-slate-300">Simulation</span>
+          <span
+            class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+            :class="backendSimulationRunning ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-700'"
+          >
+            {{ backendSimulationRunning ? 'running' : 'stopped' }}
+          </span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="rounded-lg bg-slate-800/90 px-2.5 py-2">
+            <p class="text-[10px] uppercase tracking-wide text-slate-400">Live messages</p>
+            <p class="mt-1 text-base font-bold text-cyan-300">{{ liveMessageCount }}</p>
+          </div>
+          <div class="rounded-lg bg-slate-800/90 px-2.5 py-2">
+            <p class="text-[10px] uppercase tracking-wide text-slate-400">Last message</p>
+            <p class="mt-1 truncate text-[11px] font-semibold text-slate-200">
+              {{ lastLiveMessageAt || 'none yet' }}
+            </p>
+          </div>
+        </div>
+
+        <p class="truncate rounded-lg bg-slate-800/90 px-2.5 py-2 text-[10px] text-slate-300">
+          Backend: {{ backendDebugUrl }}
+        </p>
+
+        <div v-if="realtimeError || backendHealthError" class="rounded-lg border border-rose-400/50 bg-rose-500/10 px-2.5 py-2 text-[10px] text-rose-100">
+          {{ realtimeError || backendHealthError }}
+        </div>
+
+        <div class="flex gap-2 pt-1">
+          <button
+            type="button"
+            class="flex-1 rounded-lg border border-slate-600 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-100 transition hover:bg-slate-800"
+            @click="debugRefresh"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            class="flex-1 rounded-lg border border-cyan-400/70 bg-cyan-500/20 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-cyan-100 transition hover:bg-cyan-500/30"
+            @click="toggleBackendSimulation"
+          >
+            {{ backendSimulationRunning ? 'Stop Sim' : 'Start Sim' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <nav
       v-if="!isAuthRoute"

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 import os
+from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,6 +109,11 @@ class MonthlySpendReportRequest(BaseModel):
     month: str = Field(description="Target month in YYYY-MM format")
     transactions: list[ReportTransactionItem] = Field(default_factory=list)
     currency: str = "INR"
+
+
+class RecurringSeedResponse(BaseModel):
+    created: int
+    message: str
 
 
 DEMO_SCENARIOS: list[DemoScenario] = [
@@ -522,8 +528,10 @@ CONTROL_UI = """
                             <button class="btn-brand" id="startBtn">Start Simulation</button>
                             <button class="btn-danger" id="stopBtn">Stop Simulation</button>
                             <button class="btn-plain" id="refreshBtn">Refresh Status</button>
+                            <button class="btn-plain" id="seedRecurringBtn">Seed Recurring Demo</button>
                             <span class="pill pill-muted" id="simulationStatus">Checking...</span>
                         </div>
+                        <p class="hint" id="seedRecurringStatus"></p>
 
                         <p class="section-label">Demo Scenarios</p>
                         <div class="scenario-list" id="scenarioList"></div>
@@ -614,6 +622,7 @@ CONTROL_UI = """
 
             const scenarioList = document.getElementById("scenarioList");
             const scenarioError = document.getElementById("scenarioError");
+            const seedRecurringStatus = document.getElementById("seedRecurringStatus");
 
             const messages = document.getElementById("messages");
             const messageCount = document.getElementById("messageCount");
@@ -711,6 +720,18 @@ CONTROL_UI = """
                     body: JSON.stringify({ state }),
                 });
                 await refreshSimulationStatus();
+            }
+
+            async function seedRecurringDemo() {
+                seedRecurringStatus.textContent = "Seeding recurring demo transactions...";
+                try {
+                    const payload = await apiJson("/simulation/seed-recurring", {
+                        method: "POST",
+                    });
+                    seedRecurringStatus.textContent = payload.message || "Recurring demo transactions seeded.";
+                } catch (error) {
+                    seedRecurringStatus.textContent = `Seed failed: ${error.message}`;
+                }
             }
 
             function renderScenarios(payload) {
@@ -933,6 +954,7 @@ CONTROL_UI = """
 
             document.getElementById("startBtn").addEventListener("click", () => setSimulationState("start"));
             document.getElementById("stopBtn").addEventListener("click", () => setSimulationState("stop"));
+            document.getElementById("seedRecurringBtn").addEventListener("click", seedRecurringDemo);
             document.getElementById("refreshBtn").addEventListener("click", async () => {
                 await refreshSimulationStatus();
                 await refreshScenarios();
@@ -1067,6 +1089,57 @@ async def monthly_spend_report(payload: MonthlySpendReportRequest) -> Response:
         headers={
             "Content-Disposition": f'attachment; filename="monthly-spend-{month_prefix}.pdf"'
         },
+    )
+
+
+@app.post("/simulation/seed-recurring", response_model=RecurringSeedResponse)
+async def seed_recurring_demo() -> RecurringSeedResponse:
+    now = datetime.now(timezone.utc)
+    recurring_templates = [
+        {
+            "merchant": "Netflix",
+            "message": "Netflix subscription charged INR 649",
+            "amount": 649.0,
+            "day_offsets": [61, 31, 1],
+            "bucket": "Entertainment",
+        },
+        {
+            "merchant": "PowerFit Gym",
+            "message": "Gym membership fee debited INR 1200",
+            "amount": 1200.0,
+            "day_offsets": [58, 29],
+            "bucket": "Health",
+        },
+        {
+            "merchant": "CloudVault",
+            "message": "Cloud storage subscription charged INR 149",
+            "amount": 149.0,
+            "day_offsets": [21, 14, 7],
+            "bucket": "Entertainment",
+        },
+    ]
+
+    seeded_messages: list[dict] = []
+    for template in recurring_templates:
+        for day_offset in template["day_offsets"]:
+            timestamp = now - timedelta(days=day_offset)
+            seeded_messages.append(
+                {
+                    "id": uuid4().hex,
+                    "timestamp": timestamp.isoformat(),
+                    "message": template["message"],
+                    "amount": template["amount"],
+                    "merchant": template["merchant"],
+                    "bucket": template["bucket"],
+                    "account_last4": "1001",
+                    "transaction_id": uuid4().hex[:10].upper(),
+                }
+            )
+
+    created = await simulator.inject_messages(seeded_messages)
+    return RecurringSeedResponse(
+        created=created,
+        message=f"Created {created} recurring/subscription demo transactions.",
     )
 
 

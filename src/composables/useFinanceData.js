@@ -406,6 +406,7 @@ const demoScenarioError = ref('')
 let feedSocket = null
 let reconnectTimer = null
 let connectionStarted = false
+const WS_CONNECT_TIMEOUT_MS = 5000
 const seenLiveIds = new Set()
 
 const transactions = ref([
@@ -650,11 +651,34 @@ const ingestMessages = (rawMessages, options = {}) => {
 
 const runExpenseSimulation = () => ingestMessages(simulationMessages, { includeIncome: false })
 
-const backendWsUrl = () => {
-  const url = new URL(backendBaseUrl)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  url.pathname = '/ws/messages'
-  return url.toString()
+const toWsCandidate = (value) => {
+  try {
+    const url = new URL(value)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    url.pathname = '/ws/messages'
+    url.search = ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+const backendWsCandidates = () => {
+  const candidates = [toWsCandidate(backendBaseUrl)]
+
+  if (typeof window !== 'undefined') {
+    const pageProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const pageHost = window.location.hostname || '127.0.0.1'
+
+    candidates.push(`${pageProtocol}//${pageHost}:8010/ws/messages`)
+
+    if (pageHost !== '127.0.0.1' && pageHost !== 'localhost') {
+      candidates.push(`${pageProtocol}//127.0.0.1:8010/ws/messages`)
+      candidates.push(`${pageProtocol}//localhost:8010/ws/messages`)
+    }
+  }
+
+  return [...new Set(candidates.filter(Boolean))]
 }
 
 const toLiveTransaction = (item) => {
@@ -855,51 +879,125 @@ const ensureRealtimeConnection = () => {
   realtimeStatus.value = 'connecting'
   realtimeError.value = ''
 
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+
   refreshBackendSimulationStatus()
   refreshDemoScenarios()
   checkBackendHealth()
 
-  feedSocket = new WebSocket(backendWsUrl())
+  const wsCandidates = backendWsCandidates()
 
-  feedSocket.onopen = () => {
-    realtimeStatus.value = 'connected'
-    realtimeError.value = ''
+  if (wsCandidates.length === 0) {
+    realtimeStatus.value = 'error'
+    realtimeError.value = 'No websocket endpoint candidates available.'
+    connectionStarted = false
+    return
   }
 
-  feedSocket.onmessage = (event) => {
-    try {
-      const packet = JSON.parse(event.data)
+  const connectCandidate = (index) => {
+    const wsUrl = wsCandidates[index]
 
-      if (packet.type === 'history' && Array.isArray(packet.messages)) {
-        ingestHistoryPacket(packet.messages)
+    if (!wsUrl) {
+      realtimeStatus.value = 'error'
+      realtimeError.value = 'Unable to connect to backend live feed.'
+      connectionStarted = false
+      reconnectTimer = window.setTimeout(() => {
+        ensureRealtimeConnection()
+      }, 2000)
+      return
+    }
+
+    let opened = false
+    let failed = false
+    let connectTimeout = null
+
+    try {
+      feedSocket = new WebSocket(wsUrl)
+    } catch {
+      connectCandidate(index + 1)
+      return
+    }
+
+    const failAndTryNext = () => {
+      if (failed || opened) {
         return
       }
 
-      if (packet.type === 'message' && packet.data) {
-        addLiveTransaction(packet.data)
+      failed = true
+      if (connectTimeout) {
+        window.clearTimeout(connectTimeout)
       }
-    } catch {
-      realtimeError.value = 'Live feed packet parse failed.'
+
+      try {
+        feedSocket?.close()
+      } catch {
+        // Ignore close failures and continue to next candidate.
+      }
+
+      connectCandidate(index + 1)
+    }
+
+    connectTimeout = window.setTimeout(() => {
+      if (!opened) {
+        failAndTryNext()
+      }
+    }, WS_CONNECT_TIMEOUT_MS)
+
+    feedSocket.onopen = () => {
+      opened = true
+      if (connectTimeout) {
+        window.clearTimeout(connectTimeout)
+      }
+
+      realtimeStatus.value = 'connected'
+      realtimeError.value = ''
+    }
+
+    feedSocket.onmessage = (event) => {
+      try {
+        const packet = JSON.parse(event.data)
+
+        if (packet.type === 'history' && Array.isArray(packet.messages)) {
+          ingestHistoryPacket(packet.messages)
+          return
+        }
+
+        if (packet.type === 'message' && packet.data) {
+          addLiveTransaction(packet.data)
+        }
+      } catch {
+        realtimeError.value = 'Live feed packet parse failed.'
+      }
+    }
+
+    feedSocket.onerror = () => {
+      if (!opened) {
+        failAndTryNext()
+        return
+      }
+
+      realtimeStatus.value = 'error'
+      realtimeError.value = `Live feed error on ${wsUrl}.`
+    }
+
+    feedSocket.onclose = () => {
+      if (!opened) {
+        failAndTryNext()
+        return
+      }
+
+      realtimeStatus.value = 'disconnected'
+      connectionStarted = false
+      reconnectTimer = window.setTimeout(() => {
+        ensureRealtimeConnection()
+      }, 2000)
     }
   }
 
-  feedSocket.onerror = () => {
-    realtimeStatus.value = 'error'
-    realtimeError.value = 'Unable to connect to backend live feed.'
-  }
-
-  feedSocket.onclose = () => {
-    realtimeStatus.value = 'disconnected'
-    connectionStarted = false
-
-    if (reconnectTimer) {
-      window.clearTimeout(reconnectTimer)
-    }
-
-    reconnectTimer = window.setTimeout(() => {
-      ensureRealtimeConnection()
-    }, 2000)
-  }
+  connectCandidate(0)
 }
 
 const profile = computed(() => profiles[selectedProfile.value])
@@ -1033,7 +1131,12 @@ const monthlyTrend = computed(() => {
     map.set(monthKey, bucket)
   }
 
-  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value)
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([monthKey, value]) => ({
+      monthKey,
+      ...value,
+    }))
 })
 
 const currentMonthSummary = computed(() => {
@@ -1096,6 +1199,143 @@ const monthEndForecast = computed(() => {
     status: projectedExpenses <= summary.monthBudget ? 'on-track' : 'at-risk',
     riskPercent:
       summary.monthBudget > 0 ? Math.max((projectedExpenses / summary.monthBudget) * 100 - 100, 0) : 0,
+  }
+})
+
+const addMonths = (monthKey, offset) => {
+  const [yearText, monthText] = String(monthKey).split('-')
+  const baseYear = Number.parseInt(yearText, 10)
+  const baseMonth = Number.parseInt(monthText, 10)
+
+  if (!Number.isFinite(baseYear) || !Number.isFinite(baseMonth)) {
+    return monthKey
+  }
+
+  const date = new Date(baseYear, baseMonth - 1 + offset, 1)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+const spendForecast = computed(() => {
+  const monthlyExpenses = monthlyTrend.value
+    .map((item, index) => ({
+      index,
+      label: item.label,
+      value: item.expenses,
+      monthKey: item.monthKey,
+    }))
+    .filter((item) => Number.isFinite(item.value) && item.value >= 0)
+
+  if (monthlyExpenses.length === 0) {
+    return {
+      predictedNextMonth: 0,
+      confidence: 0,
+      model: '',
+      series: [],
+      chartPoints: [],
+      forecastLabel: 'Next Month',
+      upperBound: 0,
+      lowerBound: 0,
+    }
+  }
+
+  const latestMonth = profiledTransactions.value
+    .map((tx) => toIsoDate(tx))
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1)
+    ?.slice(0, 7)
+
+  const history = (() => {
+    if (!latestMonth) {
+      return monthlyExpenses
+    }
+
+    return monthlyExpenses.map((entry, offset) => ({
+      ...entry,
+      monthKey: addMonths(latestMonth, -(monthlyExpenses.length - 1 - offset)),
+    }))
+  })()
+
+  const n = history.length
+  const xMean = history.reduce((sum, point) => sum + point.index, 0) / n
+  const yMean = history.reduce((sum, point) => sum + point.value, 0) / n
+
+  const varianceX = history.reduce((sum, point) => {
+    const centered = point.index - xMean
+    return sum + centered * centered
+  }, 0)
+
+  const covarianceXY = history.reduce((sum, point) => {
+    return sum + (point.index - xMean) * (point.value - yMean)
+  }, 0)
+
+  const slope = varianceX > 0 ? covarianceXY / varianceX : 0
+  const intercept = yMean - slope * xMean
+  const trendPrediction = intercept + slope * n
+
+  const alpha = 0.42
+  const smoothed = history.reduce(
+    (state, point) => alpha * point.value + (1 - alpha) * state,
+    history[0]?.value ?? 0,
+  )
+
+  const rawPrediction = trendPrediction * 0.6 + smoothed * 0.4
+  const predictedNextMonth = Math.max(rawPrediction, 0)
+
+  const residualVariance =
+    n > 1
+      ? history.reduce((sum, point) => {
+          const estimate = intercept + slope * point.index
+          const residual = point.value - estimate
+          return sum + residual * residual
+        }, 0) / (n - 1)
+      : 0
+  const residualStd = Math.sqrt(residualVariance)
+
+  const coefficientOfVariation = yMean > 0 ? residualStd / yMean : 1
+  const confidenceBase = Math.min(n / 6, 1)
+  const confidence = Math.max(Math.min((1 - coefficientOfVariation) * confidenceBase, 0.97), 0.25)
+
+  const boundPadding = residualStd * 1.2 + predictedNextMonth * 0.06
+  const lowerBound = Math.max(predictedNextMonth - boundPadding, 0)
+  const upperBound = predictedNextMonth + boundPadding
+
+  const forecastMonthKey = latestMonth ? addMonths(latestMonth, 1) : 'Next'
+  const forecastDate = /^\d{4}-\d{2}$/.test(forecastMonthKey)
+    ? new Date(`${forecastMonthKey}-01T00:00:00`)
+    : null
+  const forecastLabel = forecastDate
+    ? forecastDate.toLocaleDateString('en-US', { month: 'short' })
+    : 'Next'
+
+  const series = history.map((point) => ({
+    label: point.label,
+    monthKey: point.monthKey,
+    value: point.value,
+    isForecast: false,
+  }))
+
+  const chartPoints = [
+    ...series,
+    {
+      label: forecastLabel,
+      monthKey: forecastMonthKey,
+      value: predictedNextMonth,
+      isForecast: true,
+    },
+  ]
+
+  return {
+    predictedNextMonth,
+    confidence,
+    model: '',
+    series,
+    chartPoints,
+    forecastLabel,
+    lowerBound,
+    upperBound,
   }
 })
 
@@ -1516,6 +1756,7 @@ export const useFinanceData = () => {
     maxTrendValue,
     currentMonthSummary,
     monthEndForecast,
+    spendForecast,
     anomalySignals,
     recurringSignals,
     profiledTransactionsWithSignals,

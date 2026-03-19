@@ -102,6 +102,16 @@ class SmsSimulator:
         for queue in dead_queues:
             self._subscribers.discard(queue)
 
+    async def inject_messages(self, messages: list[dict]) -> int:
+        injected = 0
+
+        for message in messages:
+            self._history.appendleft(message)
+            await self._broadcast(message)
+            injected += 1
+
+        return injected
+
     def _generate_message(self) -> dict:
         min_amount, max_amount = SCENARIO_AMOUNT_BOUNDS.get(
             self._scenario_id,

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import useFinanceData from '../composables/useFinanceData'
 
 const {
@@ -9,6 +9,7 @@ const {
   recommendations,
   opportunities,
   monthEndForecast,
+  spendForecast,
   anomalySignals,
   recurringSignals,
   demoScenarios,
@@ -30,6 +31,80 @@ onMounted(() => {
 const applyScenario = async (scenarioId) => {
   await activateDemoScenario(scenarioId)
 }
+
+const spendChartWidth = 340
+const spendChartHeight = 170
+const spendChartPadding = {
+  top: 16,
+  right: 16,
+  bottom: 28,
+  left: 10,
+}
+
+const toSvgPath = (points) => points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+
+const spendForecastChart = computed(() => {
+  const points = spendForecast.value.chartPoints ?? []
+  if (points.length === 0) {
+    return {
+      points: [],
+      historicalPath: '',
+      forecastPath: '',
+      guideLines: [],
+      hasData: false,
+    }
+  }
+
+  const values = points.map((item) => item.value)
+  const minValue = Math.min(...values)
+  const maxValue = Math.max(...values)
+  const valueRange = maxValue - minValue || 1
+  const valuePadding = valueRange * 0.2
+  const scaledMin = Math.max(minValue - valuePadding, 0)
+  const scaledMax = maxValue + valuePadding
+  const innerWidth = spendChartWidth - spendChartPadding.left - spendChartPadding.right
+  const innerHeight = spendChartHeight - spendChartPadding.top - spendChartPadding.bottom
+
+  const mapY = (value) =>
+    spendChartPadding.top + ((scaledMax - value) / Math.max(scaledMax - scaledMin, 1)) * innerHeight
+
+  const positioned = points.map((point, index) => {
+    const x =
+      points.length > 1
+        ? spendChartPadding.left + (index / (points.length - 1)) * innerWidth
+        : spendChartPadding.left + innerWidth / 2
+
+    return {
+      ...point,
+      x,
+      y: mapY(point.value),
+      displayValue: formatCurrency(point.value),
+    }
+  })
+
+  const firstForecastIndex = positioned.findIndex((point) => point.isForecast)
+  const historicalPoints =
+    firstForecastIndex >= 0 ? positioned.slice(0, firstForecastIndex) : positioned
+  const forecastPoints =
+    firstForecastIndex > 0 ? positioned.slice(firstForecastIndex - 1) : []
+
+  const guideLines = [0, 1, 2, 3].map((step) => {
+    const value = scaledMin + ((scaledMax - scaledMin) * step) / 3
+    return {
+      value,
+      y: mapY(value),
+      label: formatCurrency(value),
+    }
+  })
+
+  return {
+    points: positioned,
+    historicalPath: historicalPoints.length > 1 ? toSvgPath(historicalPoints) : '',
+    forecastPath: forecastPoints.length > 1 ? toSvgPath(forecastPoints) : '',
+    guideLines,
+    hasData: positioned.length > 0,
+  }
+})
 </script>
 
 <template>
@@ -78,6 +153,90 @@ const applyScenario = async (scenarioId) => {
       <p class="mt-2 text-xs text-slate-600">
         Forecast {{ formatCurrency(monthEndForecast.projectedExpenses) }} against {{ formatCurrency(monthEndForecast.monthBudget) }} for {{ monthEndForecast.monthLabel }}.
       </p>
+    </section>
+
+    <section class="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5 shadow-sm">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-bold text-slate-800">Spend Forecast</h2>
+          <p class="mt-1 text-xs text-slate-600">
+            {{ spendForecast.model }} predicts {{ formatCurrency(spendForecast.predictedNextMonth) }} for {{ spendForecast.forecastLabel }}.
+          </p>
+        </div>
+        <div class="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-right shadow-sm">
+          <p class="text-[9px] font-bold uppercase tracking-widest text-slate-500">Confidence</p>
+          <p class="text-base font-bold text-indigo-700">{{ Math.round(spendForecast.confidence * 100) }}%</p>
+        </div>
+      </div>
+
+      <div class="mt-4 overflow-hidden rounded-xl border border-indigo-100 bg-white p-2">
+        <svg
+          v-if="spendForecastChart.hasData"
+          :viewBox="`0 0 ${spendChartWidth} ${spendChartHeight}`"
+          class="h-44 w-full"
+          role="img"
+          aria-label="Monthly spend history and forecast chart"
+        >
+          <line
+            v-for="line in spendForecastChart.guideLines"
+            :key="`guide-${line.y}`"
+            x1="0"
+            :x2="spendChartWidth"
+            :y1="line.y"
+            :y2="line.y"
+            stroke="#e2e8f0"
+            stroke-width="1"
+            stroke-dasharray="4 4"
+          />
+
+          <path
+            v-if="spendForecastChart.historicalPath"
+            :d="spendForecastChart.historicalPath"
+            fill="none"
+            stroke="#1d4ed8"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+
+          <path
+            v-if="spendForecastChart.forecastPath"
+            :d="spendForecastChart.forecastPath"
+            fill="none"
+            stroke="#7c3aed"
+            stroke-width="3"
+            stroke-linecap="round"
+            stroke-dasharray="7 6"
+          />
+
+          <g v-for="point in spendForecastChart.points" :key="`point-${point.label}-${point.monthKey}`">
+            <circle
+              :cx="point.x"
+              :cy="point.y"
+              :r="point.isForecast ? 4.5 : 3.5"
+              :fill="point.isForecast ? '#7c3aed' : '#1d4ed8'"
+            />
+            <text
+              :x="point.x"
+              :y="spendChartHeight - 8"
+              text-anchor="middle"
+              class="fill-slate-500 text-[10px] font-semibold"
+            >
+              {{ point.label }}
+            </text>
+          </g>
+        </svg>
+
+        <p v-else class="p-3 text-xs text-slate-500">Not enough data yet to build spend forecast.</p>
+      </div>
+
+      <div class="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+        <div class="rounded-lg border border-indigo-100 bg-white px-3 py-2">
+          Prediction band: {{ formatCurrency(spendForecast.lowerBound) }} - {{ formatCurrency(spendForecast.upperBound) }}
+        </div>
+        <div class="rounded-lg border border-indigo-100 bg-white px-3 py-2">
+          Model not accounting for irregular expenses.
+        </div>
+      </div>
     </section>
 
     <section class="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 p-5 text-white shadow-md">
@@ -140,7 +299,26 @@ const applyScenario = async (scenarioId) => {
       <p v-else class="text-xs text-slate-500">No unusual spending spikes detected in current history.</p>
     </section>
 
-    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100 mb-4">
+      <h2 class="text-sm font-bold text-slate-800 mb-4">Expense Concentration</h2>
+      <div class="space-y-4">
+        <div v-for="item in categorySummary" :key="item.name">
+          <div class="mb-1.5 flex items-center justify-between text-xs font-semibold text-slate-700">
+            <span>{{ item.name }}</span>
+            <span>{{ formatCurrency(item.amount) }}</span>
+          </div>
+          <div class="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-500"
+              :class="categoryColor[item.name] || 'bg-cyan-600'"
+              :style="{ width: `${item.percent.toFixed(0)}%` }"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100 mb-4">
       <h2 class="text-sm font-bold text-slate-800 mb-4">Recurring and Subscriptions</h2>
       <div v-if="recurringSignals.recurring.length" class="space-y-2">
         <div
@@ -159,63 +337,6 @@ const applyScenario = async (scenarioId) => {
         </div>
       </div>
       <p v-else class="text-xs text-slate-500">No recurring charge patterns found yet.</p>
-    </section>
-
-    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-bold text-slate-800">Demo Scenarios (Backend)</h2>
-        <button
-          type="button"
-          class="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-600"
-          @click="refreshDemoScenarios"
-        >
-          Refresh
-        </button>
-      </div>
-
-      <p v-if="demoScenarioLoading" class="text-xs text-slate-500">Loading scenarios from backend...</p>
-      <p v-else-if="demoScenarioError" class="text-xs font-semibold text-rose-600">{{ demoScenarioError }}</p>
-      <div v-else-if="demoScenarios.length" class="space-y-2">
-        <button
-          v-for="scenario in demoScenarios"
-          :key="scenario.id"
-          type="button"
-          class="w-full rounded-xl border px-3 py-2 text-left transition"
-          :class="
-            activeDemoScenarioId === scenario.id
-              ? 'border-cyan-300 bg-cyan-50'
-              : 'border-slate-200 bg-white hover:bg-slate-50'
-          "
-          :disabled="demoScenarioApplying"
-          @click="applyScenario(scenario.id)"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <p class="text-xs font-bold text-slate-800">{{ scenario.name }}</p>
-            <span v-if="activeDemoScenarioId === scenario.id" class="rounded-full bg-cyan-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-cyan-700">Active</span>
-          </div>
-          <p v-if="scenario.description" class="mt-1 text-[11px] text-slate-500">{{ scenario.description }}</p>
-        </button>
-      </div>
-      <p v-else class="text-xs text-slate-500">No backend scenarios returned.</p>
-    </section>
-
-    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100 mb-4">
-      <h2 class="text-sm font-bold text-slate-800 mb-4">Expense Concentration</h2>
-      <div class="space-y-4">
-        <div v-for="item in categorySummary" :key="item.name">
-          <div class="mb-1.5 flex items-center justify-between text-xs font-semibold text-slate-700">
-            <span>{{ item.name }}</span>
-            <span>{{ formatCurrency(item.amount) }}</span>
-          </div>
-          <div class="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div
-              class="h-full rounded-full transition-all duration-500"
-              :class="categoryColor[item.name] || 'bg-cyan-600'"
-              :style="{ width: `${item.percent.toFixed(0)}%` }"
-            ></div>
-          </div>
-        </div>
-      </div>
     </section>
   </main>
 </template>
