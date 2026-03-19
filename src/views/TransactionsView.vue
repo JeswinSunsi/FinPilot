@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
 import useFinanceData from '../composables/useFinanceData'
+import resolveBackendBaseUrl from '../utils/backendUrl'
 
 const {
   profiledTransactionsWithSignals,
@@ -10,10 +11,7 @@ const {
   formatCurrency,
 } = useFinanceData()
 
-const backendBaseUrl = (import.meta.env.VITE_SMS_BACKEND_BASE_URL ?? 'http://127.0.0.1:8010').replace(
-  /\/$/,
-  '',
-)
+const backendBaseUrl = resolveBackendBaseUrl(import.meta.env.VITE_SMS_BACKEND_BASE_URL)
 
 const activeFilter = ref('All')
 const selectedTransactionId = ref(null)

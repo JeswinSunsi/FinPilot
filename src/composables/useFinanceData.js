@@ -1,4 +1,5 @@
 import { computed, ref, watch } from 'vue'
+import resolveBackendBaseUrl from '../utils/backendUrl'
 
 const profiles = {
   student: {
@@ -322,15 +323,16 @@ const setPrimaryBankAccount = (accountId) => {
 
 hydrateAuthState()
 
-const backendBaseUrl = (import.meta.env.VITE_SMS_BACKEND_BASE_URL ?? 'http://127.0.0.1:8010').replace(
-  /\/$/,
-  '',
-)
+const backendBaseUrl = resolveBackendBaseUrl(import.meta.env.VITE_SMS_BACKEND_BASE_URL)
 
 const realtimeStatus = ref('disconnected')
 const realtimeError = ref('')
 const backendSimulationRunning = ref(false)
 const liveMessageCount = ref(0)
+const lastLiveMessageAt = ref('')
+const backendHealthStatus = ref('unknown')
+const backendHealthError = ref('')
+const backendDebugUrl = backendBaseUrl
 const demoScenarios = ref([])
 const activeDemoScenarioId = ref('')
 const demoScenarioLoading = ref(false)
@@ -621,6 +623,7 @@ const addLiveTransaction = (item) => {
   seenLiveIds.add(tx.id)
   transactions.value.push(tx)
   liveMessageCount.value += 1
+  lastLiveMessageAt.value = tx.occurredAt ?? new Date().toISOString()
   return true
 }
 
@@ -645,6 +648,29 @@ const refreshBackendSimulationStatus = async () => {
     backendSimulationRunning.value = Boolean(payload.running)
   } catch {
     backendSimulationRunning.value = false
+  }
+}
+
+const checkBackendHealth = async () => {
+  backendHealthStatus.value = 'checking'
+  backendHealthError.value = ''
+
+  try {
+    const response = await fetch(`${backendBaseUrl}/health`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Health HTTP ${response.status}`)
+    }
+
+    backendHealthStatus.value = 'ok'
+  } catch (error) {
+    backendHealthStatus.value = 'down'
+    backendHealthError.value = error instanceof Error ? error.message : 'Health check failed.'
   }
 }
 
@@ -767,6 +793,7 @@ const ensureRealtimeConnection = () => {
 
   refreshBackendSimulationStatus()
   refreshDemoScenarios()
+  checkBackendHealth()
 
   feedSocket = new WebSocket(backendWsUrl())
 
@@ -1389,16 +1416,7 @@ const bindRealtimeWatcher = () => {
   }
 
   realtimeWatcherBound = true
-
-  watch(
-    isAuthenticated,
-    (authed) => {
-      if (authed) {
-        ensureRealtimeConnection()
-      }
-    },
-    { immediate: true },
-  )
+  ensureRealtimeConnection()
 }
 
 export const useFinanceData = () => {
@@ -1453,7 +1471,12 @@ export const useFinanceData = () => {
     realtimeStatus,
     realtimeError,
     backendSimulationRunning,
+    backendDebugUrl,
+    backendHealthStatus,
+    backendHealthError,
+    checkBackendHealth,
     liveMessageCount,
+    lastLiveMessageAt,
     refreshBackendSimulationStatus,
     setBackendSimulationState,
     demoScenarios,

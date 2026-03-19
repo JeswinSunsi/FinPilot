@@ -76,16 +76,22 @@ $env:GROQ_API_KEY="your_groq_api_key"
 $env:GROQ_VISION_MODEL="meta-llama/llama-4-scout-17b-16e-instruct"
 ```
 
-3. Run backend:
+3. Run backend (LAN-accessible so phones can connect):
 
 ```sh
-uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
 
-4. Make sure frontend points to backend URL:
+4. Frontend backend URL behavior:
+
+- By default, the app now uses the same hostname as the page and port `8010`.
+- Example: if you open the PWA at `http://192.168.1.20:5173`, it will call backend at `http://192.168.1.20:8010`.
+- You can still override this explicitly with `VITE_SMS_BACKEND_BASE_URL`.
+
+Optional explicit override:
 
 ```powershell
-$env:VITE_SMS_BACKEND_BASE_URL="http://127.0.0.1:8010"
+$env:VITE_SMS_BACKEND_BASE_URL="http://192.168.1.20:8010"
 ```
 
 Receipt APIs:
