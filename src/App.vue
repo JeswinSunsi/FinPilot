@@ -13,6 +13,23 @@ const navItems = [
 ]
 
 const isActive = (path) => route.path === path
+
+const toastTitle = (severity) => (severity === 'severe' ? 'Budget Alert' : 'Heads up')
+
+const toastTone = (severity) =>
+  severity === 'severe'
+    ? 'border-rose-200 bg-rose-50/95 text-rose-800 backdrop-blur-md shadow-lg shadow-rose-900/5'
+    : 'border-slate-200 bg-white/95 text-slate-800 backdrop-blur-md shadow-lg shadow-slate-900/5'
+
+const toastIconWrap = (severity) =>
+  severity === 'severe'
+    ? 'bg-rose-100 text-rose-700 ring-4 ring-rose-50'
+    : 'bg-cyan-100 text-cyan-700 ring-4 ring-cyan-50'
+
+const toastIcon = (severity) =>
+  severity === 'severe'
+    ? '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>'
+    : '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
 </script>
 
 <template>
@@ -29,24 +46,39 @@ const isActive = (path) => route.path === path
       </div>
     </header>
 
-    <div class="pointer-events-none fixed left-1/2 top-24 z-40 flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4">
-      <div
-        v-for="toast in toasts"
-        :key="toast.id"
-        class="pointer-events-auto rounded-xl border px-3 py-2 shadow-lg backdrop-blur"
-        :class="toast.severity === 'severe' ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-200 bg-white text-slate-700'"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <p class="text-xs font-semibold leading-relaxed">{{ toast.message }}</p>
-          <button
-            type="button"
-            class="rounded-full px-1 text-xs font-bold text-current/80 hover:bg-black/5"
-            @click="dismissToast(toast.id)"
-          >
-            x
-          </button>
-        </div>
-      </div>
+    <div class="pointer-events-none fixed left-1/2 top-24 z-40 w-full max-w-md -translate-x-1/2 px-4">
+      <TransitionGroup name="toast" tag="div" class="flex flex-col gap-2">
+        <article
+          v-for="toast in toasts"
+          :key="toast.id"
+          class="pointer-events-auto rounded-lg border p-4 shadow-lg"
+          :class="toastTone(toast.severity)"
+        >
+          <div class="flex items-start gap-3">
+            <div
+              class="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full"
+              :class="toastIconWrap(toast.severity)"
+              aria-hidden="true"
+              v-html="toastIcon(toast.severity)"
+            >
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-current/70">{{ toastTitle(toast.severity) }}</p>
+              <p class="mt-1 text-xs font-medium leading-relaxed text-current">{{ toast.message }}</p>
+            </div>
+            <button
+              type="button"
+              class="rounded-full p-1 text-current/50 transition hover:bg-current/10 hover:text-current"
+              @click="dismissToast(toast.id)"
+              aria-label="Dismiss notification"
+            >
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </article>
+      </TransitionGroup>
     </div>
 
     <RouterView />
@@ -65,3 +97,20 @@ const isActive = (path) => route.path === path
     </nav>
   </div>
 </template>
+
+<style scoped>
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 180ms ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.toast-move {
+  transition: transform 180ms ease;
+}
+</style>

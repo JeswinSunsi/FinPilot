@@ -25,6 +25,14 @@ SAMPLE_MERCHANTS = [
     "ATM Withdrawal",
 ]
 
+SCENARIO_AMOUNT_BOUNDS: dict[str, tuple[int, int]] = {
+    "balanced": (50, 1000),
+    "inflation": (180, 2800),
+    "subscription-heavy": (80, 1400),
+}
+
+DEFAULT_SCENARIO_ID = "balanced"
+
 
 class SmsSimulator:
     def __init__(self, interval_seconds: float = 2.0, history_size: int = 100) -> None:
@@ -33,6 +41,7 @@ class SmsSimulator:
         self._task: asyncio.Task | None = None
         self._subscribers: set[asyncio.Queue] = set()
         self._history: Deque[dict] = deque(maxlen=history_size)
+        self._scenario_id = DEFAULT_SCENARIO_ID
 
     @property
     def running(self) -> bool:
@@ -40,6 +49,14 @@ class SmsSimulator:
 
     def history(self) -> list[dict]:
         return list(self._history)
+
+    @property
+    def scenario_id(self) -> str:
+        return self._scenario_id
+
+    def set_scenario(self, scenario_id: str) -> None:
+        if scenario_id in SCENARIO_AMOUNT_BOUNDS:
+            self._scenario_id = scenario_id
 
     async def start(self) -> None:
         if self._running:
@@ -86,8 +103,14 @@ class SmsSimulator:
             self._subscribers.discard(queue)
 
     def _generate_message(self) -> dict:
+        min_amount, max_amount = SCENARIO_AMOUNT_BOUNDS.get(
+            self._scenario_id,
+            SCENARIO_AMOUNT_BOUNDS[DEFAULT_SCENARIO_ID],
+        )
         merchant = random.choice(SAMPLE_MERCHANTS)
-        amount = Decimal(random.randint(50, 7500)) + Decimal(random.random()).quantize(Decimal("0.01"))
+        amount = Decimal(random.randint(min_amount, max_amount)) + Decimal(random.random()).quantize(
+            Decimal("0.01")
+        )
         account_tail = random.randint(1000, 9999)
         txn_id = uuid4().hex[:10].upper()
 

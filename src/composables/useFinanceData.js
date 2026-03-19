@@ -332,7 +332,7 @@ const toLiveTransaction = (item) => {
     source: 'backend-live',
     occurredAt: item.timestamp ?? new Date().toISOString(),
     category: backendBucketToCategory[item.bucket] ?? 'Other',
-    bucket: bucketByCategory[backendBucketToCategory[item.bucket] ?? 'Other'] ?? 'Misc',
+    bucket: bucketByCategory.value[backendBucketToCategory[item.bucket] ?? 'Other'] ?? 'Misc',
     backendBucket: item.bucket ?? 'Miscellaneous',
     merchant: item.merchant ?? '',
     transactionId: item.transaction_id ?? '',
@@ -965,7 +965,7 @@ const pushToast = (message, severity = 'info') => {
 
   window.setTimeout(() => {
     toasts.value = toasts.value.filter((toast) => toast.id !== id)
-  }, 4500)
+  }, 7500)
 
   return id
 }
@@ -978,11 +978,11 @@ watch(
   riskSignals,
   (next, prev) => {
     if (next.overspending && !prev?.overspending) {
-      pushToast('Severe: Total spending crossed your overall budget guardrail.', 'severe')
+      pushToast('Severe: Total spending crossed your budget.', 'severe')
     }
 
     if (next.bucketPressure && !prev?.bucketPressure) {
-      pushToast('Severe: One or more buckets are now overspent.', 'severe')
+      pushToast('Severe: A bucket is now overspent.', 'severe')
     }
   },
   { immediate: true },
