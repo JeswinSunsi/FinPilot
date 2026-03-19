@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
+import os
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +14,27 @@ from pydantic import BaseModel, Field
 from app.services.receipt_vision import ReceiptAnalysisError, ReceiptAnalyzer
 from app.services.report_builder import ReportTransaction, build_monthly_spend_pdf
 from app.services.simulator import SmsSimulator
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip().lstrip("\ufeff")
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_load_env_file(_PROJECT_ROOT / ".env")
+_load_env_file(Path(__file__).resolve().parent / ".env")
 
 simulator = SmsSimulator(interval_seconds=2.0)
 receipt_analyzer = ReceiptAnalyzer()
@@ -1002,7 +1025,13 @@ async def analyze_receipt(file: UploadFile = File(...)) -> dict:
     try:
         return await receipt_analyzer.analyze_receipt(image_bytes, file.content_type)
     except ReceiptAnalysisError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        message = str(exc)
+        if "GROQ_API_KEY is not configured" in message:
+            raise HTTPException(
+                status_code=503,
+                detail="GROQ_API_KEY is not configured on the backend server.",
+            ) from exc
+        raise HTTPException(status_code=502, detail=message) from exc
 
 
 @app.post("/reports/monthly-spend")

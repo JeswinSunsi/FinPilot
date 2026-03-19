@@ -59,6 +59,26 @@ const currentUser = ref(null)
 
 const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase()
 
+const HARDCODED_AUTH_EMAIL = 'jeswinsunsi@gmail.com'
+const HARDCODED_AUTH_PASSWORD = 'readingclub'
+const HARDCODED_AUTH_USER = {
+  id: 'user-hardcoded-jeswinsunsi',
+  firstName: 'Jeswin',
+  lastName: 'Sunsi',
+  email: HARDCODED_AUTH_EMAIL,
+  phone: '',
+  password: HARDCODED_AUTH_PASSWORD,
+  accounts: [
+    {
+      id: 'account-hardcoded-jeswinsunsi-primary',
+      nickname: 'Primary Account',
+      last4: '1001',
+      isPrimary: true,
+    },
+  ],
+  createdAt: '2026-03-19T00:00:00.000Z',
+}
+
 const createAccountId = () => `account-${Date.now()}-${Math.floor(Math.random() * 100000)}`
 
 const normalizeAccountEntry = (account, index = 0) => {
@@ -107,6 +127,46 @@ const publicUser = (userRecord) => {
   }
 }
 
+const withHardcodedAccount = (records) => {
+  const normalizedRecords = Array.isArray(records) ? records : []
+  const hardcodedEmail = normalizeEmail(HARDCODED_AUTH_EMAIL)
+  const matchIndex = normalizedRecords.findIndex(
+    (record) => normalizeEmail(record.email) === hardcodedEmail,
+  )
+
+  if (matchIndex < 0) {
+    return [
+      ...normalizedRecords,
+      {
+        ...HARDCODED_AUTH_USER,
+        email: hardcodedEmail,
+        accounts: ensurePrimaryAccount(HARDCODED_AUTH_USER.accounts),
+      },
+    ]
+  }
+
+  return normalizedRecords.map((record, index) => {
+    if (index !== matchIndex) {
+      return record
+    }
+
+    return {
+      ...record,
+      id: HARDCODED_AUTH_USER.id,
+      firstName: HARDCODED_AUTH_USER.firstName,
+      lastName: HARDCODED_AUTH_USER.lastName,
+      email: hardcodedEmail,
+      password: HARDCODED_AUTH_PASSWORD,
+      accounts: ensurePrimaryAccount(
+        Array.isArray(record.accounts) && record.accounts.length > 0
+          ? record.accounts
+          : HARDCODED_AUTH_USER.accounts,
+      ),
+      createdAt: record.createdAt ?? HARDCODED_AUTH_USER.createdAt,
+    }
+  })
+}
+
 const persistUsers = () => {
   if (typeof window === 'undefined') {
     return
@@ -136,15 +196,17 @@ const hydrateAuthState = () => {
   try {
     const rawUsers = window.localStorage.getItem(AUTH_USERS_STORAGE_KEY)
     const parsedUsers = rawUsers ? JSON.parse(rawUsers) : []
-    users.value = Array.isArray(parsedUsers)
-      ? parsedUsers.map((record) => ({
-          ...record,
-          email: normalizeEmail(record.email),
-          accounts: ensurePrimaryAccount(record.accounts ?? []),
-        }))
-      : []
+    users.value = withHardcodedAccount(
+      Array.isArray(parsedUsers)
+        ? parsedUsers.map((record) => ({
+            ...record,
+            email: normalizeEmail(record.email),
+            accounts: ensurePrimaryAccount(record.accounts ?? []),
+          }))
+        : [],
+    )
   } catch {
-    users.value = []
+    users.value = withHardcodedAccount([])
   }
 
   try {
@@ -154,6 +216,8 @@ const hydrateAuthState = () => {
   } catch {
     currentUser.value = null
   }
+
+  persistUsers()
 }
 
 const isAuthenticated = computed(() => Boolean(currentUser.value?.id))
