@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from app.services.receipt_vision import ReceiptAnalysisError, ReceiptAnalyzer
+from app.services.report_builder import ReportTransaction, build_monthly_spend_pdf
 from app.services.simulator import SmsSimulator
 
 simulator = SmsSimulator(interval_seconds=2.0)
@@ -68,6 +70,21 @@ class DemoScenarioListResponse(BaseModel):
 
 class ActivateScenarioRequest(BaseModel):
     scenarioId: str
+
+
+class ReportTransactionItem(BaseModel):
+    date: str
+    description: str
+    amount: float
+    direction: Literal["in", "out"]
+    category: str = "Other"
+    bucket: str = "Misc"
+
+
+class MonthlySpendReportRequest(BaseModel):
+    month: str = Field(description="Target month in YYYY-MM format")
+    transactions: list[ReportTransactionItem] = Field(default_factory=list)
+    currency: str = "INR"
 
 
 DEMO_SCENARIOS: list[DemoScenario] = [
@@ -468,15 +485,7 @@ CONTROL_UI = """
             <section class="layout">
                 <div class="stack">
                     <section class="card">
-                        <h2>Judge Flow</h2>
-                        <p class="subtext">Suggested narrative to cover the complete backend feature set in under 3 minutes.</p>
-                        <ol class="demo-steps">
-                            <li>Click Start Simulation, then show live transactions arriving in the stream.</li>
-                            <li>Switch between demo scenarios to highlight backend-configurable personas.</li>
-                            <li>Show category tagging in incoming messages and historical feed.</li>
-                            <li>Upload a receipt image and explain item extraction plus value insights.</li>
-                            <li>Open docs to prove each UI action maps directly to an API endpoint.</li>
-                        </ol>
+                        <h2>API Resources</h2>
                         <div class="api-links">
                             <a class="link-btn btn-plain" href="/docs" target="_blank" rel="noreferrer">Open Swagger</a>
                             <a class="link-btn btn-plain" href="/openapi.json" target="_blank" rel="noreferrer">OpenAPI JSON</a>
@@ -994,6 +1003,42 @@ async def analyze_receipt(file: UploadFile = File(...)) -> dict:
         return await receipt_analyzer.analyze_receipt(image_bytes, file.content_type)
     except ReceiptAnalysisError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/reports/monthly-spend")
+async def monthly_spend_report(payload: MonthlySpendReportRequest) -> Response:
+    try:
+        month_date = datetime.strptime(payload.month, "%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Month must use YYYY-MM format.") from exc
+
+    month_prefix = month_date.strftime("%Y-%m")
+    report_transactions = [
+        ReportTransaction(
+            date=item.date,
+            description=item.description,
+            amount=item.amount,
+            direction=item.direction,
+            category=item.category,
+            bucket=item.bucket,
+        )
+        for item in payload.transactions
+        if item.date.startswith(month_prefix)
+    ]
+
+    pdf_bytes = build_monthly_spend_pdf(
+        month=month_prefix,
+        transactions=report_transactions,
+        currency=payload.currency or "INR",
+    )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="monthly-spend-{month_prefix}.pdf"'
+        },
+    )
 
 
 @app.get("/simulation/status", response_model=SimulationStatusResponse)

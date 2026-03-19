@@ -23,6 +23,9 @@ const receiptError = ref('')
 const receiptResult = ref(null)
 const receiptFeatureStatus = ref({ configured: false, model: '' })
 const previousReceiptSnapshot = ref(null)
+const selectedReportMonth = ref('')
+const reportDownloading = ref(false)
+const reportError = ref('')
 
 const RECEIPT_SNAPSHOT_KEY = 'finance:last-receipt-analysis'
 
@@ -42,6 +45,25 @@ const sortedTransactions = computed(() =>
   }),
 )
 
+const availableReportMonths = computed(() => {
+  const monthSet = new Set()
+
+  for (const tx of profiledTransactionsWithSignals.value) {
+    const isoDate = tx.occurredAt?.slice(0, 10) ?? tx.date
+    if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+      monthSet.add(isoDate.slice(0, 7))
+    }
+  }
+
+  return [...monthSet].sort((a, b) => b.localeCompare(a))
+})
+
+const monthLabel = (monthKey) => {
+  const [year, month] = monthKey.split('-')
+  const monthDate = new Date(Number(year), Number(month) - 1, 1)
+  return monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
 const visibleTransactions = computed(() => {
   if (activeFilter.value === 'All') {
     return sortedTransactions.value
@@ -53,6 +75,72 @@ const visibleTransactions = computed(() => {
 
   return sortedTransactions.value.filter((tx) => tx.bucket === activeFilter.value)
 })
+
+watch(
+  availableReportMonths,
+  (months) => {
+    if (!selectedReportMonth.value || !months.includes(selectedReportMonth.value)) {
+      selectedReportMonth.value = months[0] ?? ''
+    }
+  },
+  { immediate: true },
+)
+
+const downloadMonthlyReport = async () => {
+  reportError.value = ''
+
+  if (!selectedReportMonth.value) {
+    reportError.value = 'Select a month to download the report.'
+    return
+  }
+
+  const payloadTransactions = profiledTransactionsWithSignals.value.map((tx) => ({
+    date: tx.occurredAt?.slice(0, 10) ?? tx.date,
+    description: tx.description,
+    amount: Number(tx.amount) || 0,
+    direction: tx.direction,
+    category: tx.category ?? 'Other',
+    bucket: tx.bucket ?? 'Misc',
+  }))
+
+  reportDownloading.value = true
+  try {
+    const response = await fetch(`${backendBaseUrl}/reports/monthly-spend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        month: selectedReportMonth.value,
+        currency: 'INR',
+        transactions: payloadTransactions,
+      }),
+    })
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`
+      try {
+        const errorPayload = await response.json()
+        detail = String(errorPayload.detail ?? detail)
+      } catch {
+        // Ignore malformed backend error payloads.
+      }
+      throw new Error(detail)
+    }
+
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `monthly-spend-${selectedReportMonth.value}.pdf`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    reportError.value = `Download failed: ${error.message}`
+  } finally {
+    reportDownloading.value = false
+  }
+}
 
 const openBucketPicker = (tx) => {
   if (tx.direction !== 'out') {
@@ -319,6 +407,36 @@ onMounted(() => {
     <section>
       <h1 class="text-xl font-bold tracking-tight text-slate-900">Transactions</h1>
       <p class="mt-1 text-xs text-slate-500">Auto-categorized spending feed</p>
+
+      <div class="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="text-xs font-semibold text-sky-900">Monthly Spend PDF</p>
+            <p class="text-[11px] text-sky-700">Choose a month and download a styled ReportLab summary.</p>
+          </div>
+
+          <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <select
+              v-model="selectedReportMonth"
+              class="min-w-[180px] rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+            >
+              <option v-for="month in availableReportMonths" :key="month" :value="month">
+                {{ monthLabel(month) }}
+              </option>
+            </select>
+
+            <button
+              type="button"
+              class="rounded-lg bg-sky-700 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              :disabled="reportDownloading || !selectedReportMonth"
+              @click="downloadMonthlyReport"
+            >
+              {{ reportDownloading ? 'Preparing PDF...' : 'Download PDF' }}
+            </button>
+          </div>
+        </div>
+        <p v-if="reportError" class="mt-2 text-xs font-medium text-rose-600">{{ reportError }}</p>
+      </div>
       
       <div class="mt-4 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
         <button
