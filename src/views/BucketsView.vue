@@ -1,4 +1,5 @@
 <script setup>
+import { ref } from 'vue'
 import useFinanceData from '../composables/useFinanceData'
 
 const {
@@ -9,7 +10,56 @@ const {
   recommendations,
   formatCurrency,
   bucketColor,
+  updateBucketSettings,
+  resetBucketLimit,
 } = useFinanceData()
+
+const editingBucketId = ref(null)
+const editName = ref('')
+const editLimit = ref('')
+const editError = ref('')
+
+const openBucketEditor = (bucket) => {
+  if (editingBucketId.value === bucket.id) {
+    editingBucketId.value = null
+    editError.value = ''
+    return
+  }
+
+  editingBucketId.value = bucket.id
+  editName.value = bucket.name
+  editLimit.value = Number(bucket.allocated).toFixed(0)
+  editError.value = ''
+}
+
+const saveBucketEditor = () => {
+  if (!editingBucketId.value) {
+    return
+  }
+
+  const result = updateBucketSettings(editingBucketId.value, {
+    name: editName.value,
+    limit: editLimit.value,
+  })
+
+  if (!result.ok) {
+    editError.value = result.error
+    return
+  }
+
+  editingBucketId.value = null
+  editError.value = ''
+}
+
+const restoreAutoLimit = () => {
+  if (!editingBucketId.value) {
+    return
+  }
+
+  resetBucketLimit(editingBucketId.value)
+  editingBucketId.value = null
+  editError.value = ''
+}
 </script>
 
 <template>
@@ -26,7 +76,12 @@ const {
     </section>
 
     <section class="flex flex-col gap-3">
-      <article v-for="bucket in bucketAllocation" :key="bucket.name" class="rounded-2xl bg-white p-4 shadow-sm border border-slate-100">
+      <article
+        v-for="bucket in bucketAllocation"
+        :key="bucket.id"
+        class="rounded-2xl bg-white p-4 shadow-sm border border-slate-100 cursor-pointer"
+        @click="openBucketEditor(bucket)"
+      >
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <div class="h-8 w-8 rounded-full flex items-center justify-center text-xs" :class="bucketColor[bucket.name] || 'bg-cyan-100 text-cyan-700'">
@@ -41,6 +96,8 @@ const {
             {{ bucket.utilization.toFixed(0) }}%
           </span>
         </div>
+
+        <p class="mb-2 text-[10px] font-semibold text-cyan-700" v-if="editingBucketId === bucket.id">Editing bucket settings</p>
         
         <div class="flex items-end justify-between text-xs mb-2">
           <div class="flex flex-col gap-0.5">
@@ -62,6 +119,39 @@ const {
             :style="{ width: `${Math.min(bucket.utilization, 100)}%` }"
           ></div>
         </div>
+
+        <form
+          v-if="editingBucketId === bucket.id"
+          class="mt-3 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
+          @submit.prevent="saveBucketEditor"
+          @click.stop
+        >
+          <label class="block">
+            <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Bucket name</span>
+            <input
+              v-model="editName"
+              type="text"
+              class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-cyan-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Budget limit (INR)</span>
+            <input
+              v-model="editLimit"
+              type="number"
+              min="0"
+              step="1"
+              class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-cyan-500"
+            />
+          </label>
+          <p v-if="editError" class="text-[10px] font-semibold text-rose-600">{{ editError }}</p>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button type="submit" class="rounded-full bg-cyan-600 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white">Save</button>
+            <button type="button" class="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-600" @click="restoreAutoLimit">
+              Auto Limit
+            </button>
+          </div>
+        </form>
       </article>
     </section>
 

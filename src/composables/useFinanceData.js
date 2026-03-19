@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const profiles = {
   student: {
@@ -86,9 +86,9 @@ const transactions = ref([
 ])
 
 const simulationMessages = [
-  'Paid $18.50 for coffee at Central Cafe',
+  'Paid Rs 18.50 for coffee at Central Cafe',
   'UPI debit 1290 to FreshMart grocery store',
-  'Uber ride charged $24.30',
+  'Uber ride charged Rs 24.30',
   'Electricity bill paid 3400',
   'Salary credited 5400',
   'Pharmacy purchase amount 45',
@@ -104,7 +104,7 @@ const categoryRules = {
   Lifestyle: ['shopping', 'travel', 'streaming', 'entertainment', 'bookstore'],
 }
 
-const bucketByCategory = {
+const defaultBucketByCategory = {
   Housing: 'Housing',
   Transport: 'Transport',
   Food: 'Food',
@@ -113,6 +113,27 @@ const bucketByCategory = {
   Lifestyle: 'Misc',
   Other: 'Misc',
 }
+
+const bucketByCategory = ref({ ...defaultBucketByCategory })
+
+const buildBucketSettings = (template) =>
+  Object.entries(template).map(([name, ratio], index) => ({
+    id: `bucket-${index + 1}`,
+    name,
+    ratio,
+    customLimit: null,
+  }))
+
+const bucketSettings = ref(buildBucketSettings(profiles[selectedProfile.value].bucketTemplate))
+
+watch(
+  selectedProfile,
+  (nextProfile) => {
+    bucketSettings.value = buildBucketSettings(profiles[nextProfile].bucketTemplate)
+    bucketByCategory.value = { ...defaultBucketByCategory }
+  },
+  { flush: 'sync' },
+)
 
 const backendBucketToCategory = {
   Groceries: 'Food',
@@ -142,10 +163,10 @@ const expenseHints = [
 const incomeHints = ['credited', 'salary', 'deposit', 'received', 'refund']
 
 const formatCurrency = (value) =>
-  new Intl.NumberFormat('en-US', {
+  new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
+    currency: 'INR',
+    maximumFractionDigits: 2,
   }).format(value)
 
 const categorizeTransaction = (tx) => {
@@ -170,7 +191,7 @@ const categorizeTransaction = (tx) => {
 
 const findAmountInText = (text) => {
   const normalized = text.replace(/,/g, '')
-  const match = normalized.match(/(?:[$€£]|rs\.?|inr)?\s*(\d+(?:\.\d{1,2})?)/i)
+  const match = normalized.match(/(?:[$€£₹]|rs\.?|inr)?\s*(\d+(?:\.\d{1,2})?)/i)
 
   if (!match) {
     return 0
@@ -389,6 +410,79 @@ const ensureRealtimeConnection = () => {
 
 const profile = computed(() => profiles[selectedProfile.value])
 
+const editableBucketNames = computed(() => bucketSettings.value.map((bucket) => bucket.name))
+
+const assignTransactionBucket = (transactionId, bucketName) => {
+  if (!editableBucketNames.value.includes(bucketName)) {
+    return false
+  }
+
+  const tx = transactions.value.find((item) => item.id === transactionId)
+  if (!tx || tx.direction !== 'out') {
+    return false
+  }
+
+  tx.bucket = bucketName
+  return true
+}
+
+const updateBucketSettings = (bucketId, payload) => {
+  const bucket = bucketSettings.value.find((item) => item.id === bucketId)
+  if (!bucket) {
+    return { ok: false, error: 'Bucket not found.' }
+  }
+
+  const nextName = typeof payload.name === 'string' ? payload.name.trim() : bucket.name
+  if (!nextName) {
+    return { ok: false, error: 'Bucket name is required.' }
+  }
+
+  if (
+    bucketSettings.value.some(
+      (item) => item.id !== bucketId && item.name.toLowerCase() === nextName.toLowerCase(),
+    )
+  ) {
+    return { ok: false, error: 'Bucket name already exists.' }
+  }
+
+  const oldName = bucket.name
+  if (nextName !== oldName) {
+    bucket.name = nextName
+
+    for (const tx of transactions.value) {
+      if (tx.direction === 'out' && tx.bucket === oldName) {
+        tx.bucket = nextName
+      }
+    }
+
+    for (const [category, mappedName] of Object.entries(bucketByCategory.value)) {
+      if (mappedName === oldName) {
+        bucketByCategory.value[category] = nextName
+      }
+    }
+  }
+
+  if (payload.limit !== undefined) {
+    const parsedLimit = Number(payload.limit)
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 0) {
+      return { ok: false, error: 'Budget limit must be a valid positive number.' }
+    }
+    bucket.customLimit = parsedLimit
+  }
+
+  return { ok: true, bucket }
+}
+
+const resetBucketLimit = (bucketId) => {
+  const bucket = bucketSettings.value.find((item) => item.id === bucketId)
+  if (!bucket) {
+    return false
+  }
+
+  bucket.customLimit = null
+  return true
+}
+
 const profiledTransactions = computed(() =>
   transactions.value.map((tx) => {
     if (tx.direction === 'in') {
@@ -407,7 +501,7 @@ const profiledTransactions = computed(() =>
     return {
       ...tx,
       category,
-      bucket: bucketByCategory[category] ?? 'Misc',
+      bucket: tx.bucket ?? bucketByCategory.value[category] ?? 'Misc',
     }
   }),
 )
@@ -469,16 +563,17 @@ const categorySummary = computed(() => {
 })
 
 const bucketAllocation = computed(() => {
-  const template = profile.value.bucketTemplate
-
-  return Object.entries(template).map(([name, ratio]) => {
-    const allocated = totalIncome.value * ratio
+  return bucketSettings.value.map((bucket) => {
+    const allocated = bucket.customLimit ?? totalIncome.value * bucket.ratio
     const spent = profiledTransactions.value
-      .filter((tx) => tx.direction === 'out' && tx.bucket === name)
+      .filter((tx) => tx.direction === 'out' && tx.bucket === bucket.name)
       .reduce((sum, tx) => sum + tx.amount, 0)
 
     return {
-      name,
+      id: bucket.id,
+      name: bucket.name,
+      ratio: bucket.ratio,
+      customLimit: bucket.customLimit,
       allocated,
       spent,
       remaining: allocated - spent,
@@ -504,6 +599,38 @@ const riskSignals = computed(() => {
     bucketPressure: bucketAllocation.value.some((item) => item.utilization > 100),
   }
 })
+
+const toasts = ref([])
+let toastIdCursor = 0
+
+const pushToast = (message, severity = 'info') => {
+  const id = ++toastIdCursor
+  toasts.value.push({ id, message, severity })
+
+  window.setTimeout(() => {
+    toasts.value = toasts.value.filter((toast) => toast.id !== id)
+  }, 4500)
+
+  return id
+}
+
+const dismissToast = (toastId) => {
+  toasts.value = toasts.value.filter((toast) => toast.id !== toastId)
+}
+
+watch(
+  riskSignals,
+  (next, prev) => {
+    if (next.overspending && !prev?.overspending) {
+      pushToast('Severe: Total spending crossed your overall budget guardrail.', 'severe')
+    }
+
+    if (next.bucketPressure && !prev?.bucketPressure) {
+      pushToast('Severe: One or more buckets are now overspent.', 'severe')
+    }
+  },
+  { immediate: true },
+)
 
 const financialHealthScore = computed(() => {
   let score = 90
@@ -611,6 +738,11 @@ export const useFinanceData = () => {
     transactions,
     simulationMessages,
     profiledTransactions,
+    editableBucketNames,
+    bucketSettings,
+    assignTransactionBucket,
+    updateBucketSettings,
+    resetBucketLimit,
     totalIncome,
     totalExpenses,
     budgetLimit,
@@ -638,6 +770,8 @@ export const useFinanceData = () => {
     liveMessageCount,
     refreshBackendSimulationStatus,
     setBackendSimulationState,
+    toasts,
+    dismissToast,
     formatCurrency,
   }
 }

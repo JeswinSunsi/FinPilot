@@ -1,7 +1,9 @@
 <script setup>
 import { RouterLink, RouterView, useRoute } from 'vue-router'
+import useFinanceData from './composables/useFinanceData'
 
 const route = useRoute()
+const { toasts, dismissToast } = useFinanceData()
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>' },
@@ -26,6 +28,26 @@ const isActive = (path) => route.path === path
         </div>
       </div>
     </header>
+
+    <div class="pointer-events-none fixed left-1/2 top-24 z-40 flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4">
+      <div
+        v-for="toast in toasts"
+        :key="toast.id"
+        class="pointer-events-auto rounded-xl border px-3 py-2 shadow-lg backdrop-blur"
+        :class="toast.severity === 'severe' ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-200 bg-white text-slate-700'"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-xs font-semibold leading-relaxed">{{ toast.message }}</p>
+          <button
+            type="button"
+            class="rounded-full px-1 text-xs font-bold text-current/80 hover:bg-black/5"
+            @click="dismissToast(toast.id)"
+          >
+            x
+          </button>
+        </div>
+      </div>
+    </div>
 
     <RouterView />
 
