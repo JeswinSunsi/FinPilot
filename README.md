@@ -36,3 +36,38 @@ npm run dev
 ```sh
 npm run build
 ```
+
+## Backend Setup (FastAPI + Groq Vision)
+
+The backend code lives in `app` and powers the live SMS simulator plus receipt photo analysis.
+
+1. Install backend packages:
+
+```sh
+pip install -r app/requirements.txt
+```
+
+2. Set Groq credentials before starting backend:
+
+```powershell
+$env:GROQ_API_KEY="your_groq_api_key"
+# Optional: override default vision model
+$env:GROQ_VISION_MODEL="meta-llama/llama-4-scout-17b-16e-instruct"
+```
+
+3. Run backend:
+
+```sh
+uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
+```
+
+4. Make sure frontend points to backend URL:
+
+```powershell
+$env:VITE_SMS_BACKEND_BASE_URL="http://127.0.0.1:8010"
+```
+
+Receipt APIs:
+
+- `GET /receipts/status`
+- `POST /receipts/analyze` with form-data file field `file`

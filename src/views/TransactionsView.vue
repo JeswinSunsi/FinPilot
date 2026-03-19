@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import useFinanceData from '../composables/useFinanceData'
 
 const {
@@ -10,8 +10,21 @@ const {
   formatCurrency,
 } = useFinanceData()
 
+const backendBaseUrl = (import.meta.env.VITE_SMS_BACKEND_BASE_URL ?? 'http://127.0.0.1:8010').replace(
+  /\/$/,
+  '',
+)
+
 const activeFilter = ref('All')
 const selectedTransactionId = ref(null)
+const selectedReceiptFile = ref(null)
+const receiptAnalyzing = ref(false)
+const receiptError = ref('')
+const receiptResult = ref(null)
+const receiptFeatureStatus = ref({ configured: false, model: '' })
+const previousReceiptSnapshot = ref(null)
+
+const RECEIPT_SNAPSHOT_KEY = 'finance:last-receipt-analysis'
 
 const filters = computed(() => ['All', 'Income', ...editableBucketNames.value])
 
@@ -57,6 +70,248 @@ const saveBucketForTransaction = (bucketName) => {
   assignTransactionBucket(selectedTransactionId.value, bucketName)
   selectedTransactionId.value = null
 }
+
+const formatUnitCost = (item) => {
+  if (!item?.cost_per_unit || !item?.unit_label) {
+    return 'n/a'
+  }
+  return `${formatCurrency(item.cost_per_unit)} ${item.unit_label}`
+}
+
+const normalizeItemKey = (name) =>
+  String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const readReceiptSnapshot = () => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(RECEIPT_SNAPSHOT_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+    if (!parsed || !Array.isArray(parsed.items)) {
+      return null
+    }
+
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const saveReceiptSnapshot = (payload) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      RECEIPT_SNAPSHOT_KEY,
+      JSON.stringify({
+        analyzed_at: payload.analyzed_at,
+        bill_date: payload.bill_date,
+        merchant: payload.merchant,
+        currency: payload.currency,
+        items: Array.isArray(payload.items) ? payload.items : [],
+      }),
+    )
+  } catch {
+    // Ignore session storage failures in privacy-restricted browsers.
+  }
+}
+
+const buildCostComparisons = (currentItems, previousItems) => {
+  const previousByKey = new Map()
+
+  for (const item of previousItems ?? []) {
+    const key = normalizeItemKey(item?.name)
+    const unitCost = Number(item?.cost_per_unit)
+    const perItemCost = Number(item?.cost_per_item)
+    if (!key) {
+      continue
+    }
+
+    previousByKey.set(key, {
+      name: item.name,
+      cost_per_unit: Number.isFinite(unitCost) && unitCost > 0 ? unitCost : null,
+      cost_per_item: Number.isFinite(perItemCost) && perItemCost > 0 ? perItemCost : null,
+      unit_label: item.unit_label,
+    })
+  }
+
+  const betterUnit = []
+  const worseUnit = []
+  const betterPerItem = []
+  const worsePerItem = []
+
+  for (const item of currentItems ?? []) {
+    const key = normalizeItemKey(item?.name)
+    const currentUnitCost = Number(item?.cost_per_unit)
+    const currentPerItemCost = Number(item?.cost_per_item)
+    if (!key) {
+      continue
+    }
+
+    const previous = previousByKey.get(key)
+    if (!previous) {
+      continue
+    }
+
+    if (
+      Number.isFinite(currentPerItemCost) &&
+      currentPerItemCost > 0 &&
+      Number.isFinite(previous.cost_per_item) &&
+      previous.cost_per_item > 0
+    ) {
+      const perItemDelta = currentPerItemCost - previous.cost_per_item
+      if (Math.abs(perItemDelta) >= 1e-9) {
+        const percentChange = Math.abs((perItemDelta / previous.cost_per_item) * 100)
+        const comparison = {
+          name: item.name,
+          current_cost_per_item: currentPerItemCost,
+          previous_cost_per_item: previous.cost_per_item,
+          percent_change: Number(percentChange.toFixed(2)),
+        }
+
+        if (perItemDelta < 0) {
+          betterPerItem.push(comparison)
+        } else {
+          worsePerItem.push(comparison)
+        }
+      }
+    }
+
+    if (
+      Number.isFinite(currentUnitCost) &&
+      currentUnitCost > 0 &&
+      Number.isFinite(previous.cost_per_unit) &&
+      previous.cost_per_unit > 0
+    ) {
+      const unitDelta = currentUnitCost - previous.cost_per_unit
+      if (Math.abs(unitDelta) >= 1e-9) {
+        const percentChange = Math.abs((unitDelta / previous.cost_per_unit) * 100)
+        const comparison = {
+          name: item.name,
+          current_cost_per_unit: currentUnitCost,
+          previous_cost_per_unit: previous.cost_per_unit,
+          unit_label: item.unit_label || previous.unit_label || 'per unit',
+          percent_change: Number(percentChange.toFixed(2)),
+        }
+
+        if (unitDelta < 0) {
+          betterUnit.push(comparison)
+        } else {
+          worseUnit.push(comparison)
+        }
+      }
+    }
+  }
+
+  betterUnit.sort((a, b) => b.percent_change - a.percent_change)
+  worseUnit.sort((a, b) => b.percent_change - a.percent_change)
+  betterPerItem.sort((a, b) => b.percent_change - a.percent_change)
+  worsePerItem.sort((a, b) => b.percent_change - a.percent_change)
+
+  return {
+    betterUnit,
+    worseUnit,
+    betterPerItem,
+    worsePerItem,
+  }
+}
+
+const loadReceiptFeatureStatus = async () => {
+  try {
+    const response = await fetch(`${backendBaseUrl}/receipts/status`)
+    if (!response.ok) {
+      throw new Error(`Status HTTP ${response.status}`)
+    }
+
+    const payload = await response.json()
+    receiptFeatureStatus.value = {
+      configured: Boolean(payload.configured),
+      model: String(payload.model ?? ''),
+    }
+  } catch {
+    receiptFeatureStatus.value = {
+      configured: false,
+      model: '',
+    }
+  }
+}
+
+const onReceiptFileChange = (event) => {
+  receiptError.value = ''
+  const file = event.target?.files?.[0] ?? null
+  selectedReceiptFile.value = file
+}
+
+const analyzeReceipt = async () => {
+  receiptError.value = ''
+
+  if (!selectedReceiptFile.value) {
+    receiptError.value = 'Select a receipt image first.'
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', selectedReceiptFile.value)
+
+  receiptAnalyzing.value = true
+  try {
+    const response = await fetch(`${backendBaseUrl}/receipts/analyze`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      let backendDetail = `HTTP ${response.status}`
+      try {
+        const errorPayload = await response.json()
+        backendDetail = String(errorPayload.detail ?? backendDetail)
+      } catch {
+        // Ignore malformed error payloads.
+      }
+      throw new Error(backendDetail)
+    }
+
+    const payload = await response.json()
+    const previousSnapshot = readReceiptSnapshot()
+    previousReceiptSnapshot.value = previousSnapshot
+
+    const comparisons = buildCostComparisons(payload.items ?? [], previousSnapshot?.items ?? [])
+
+    receiptResult.value = {
+      ...payload,
+      insights: {
+        ...(payload.insights ?? {}),
+        better_unit_cost_items: comparisons.betterUnit,
+        worse_unit_cost_items: comparisons.worseUnit,
+        better_per_item_items: comparisons.betterPerItem,
+        worse_per_item_items: comparisons.worsePerItem,
+      },
+    }
+
+    saveReceiptSnapshot(payload)
+  } catch (error) {
+    receiptError.value = `Receipt analysis failed: ${error.message}`
+  } finally {
+    receiptAnalyzing.value = false
+  }
+}
+
+onMounted(() => {
+  loadReceiptFeatureStatus()
+  previousReceiptSnapshot.value = readReceiptSnapshot()
+})
 </script>
 
 <template>
@@ -76,6 +331,161 @@ const saveBucketForTransaction = (bucketName) => {
         >
           {{ item }}
         </button>
+      </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-bold text-slate-800">Bill Analyzer</h2>
+          <p class="mt-1 text-xs text-slate-500">
+            Upload a bill image to extract line items, per-item pricing, and cost-per-gram/ml insights.
+          </p>
+        </div>
+        <span
+          class="rounded-full px-2.5 py-1 text-[11px] font-semibold"
+          :class="
+            receiptFeatureStatus.configured
+              ? 'bg-emerald-100 text-emerald-700'
+              : 'bg-amber-100 text-amber-700'
+          "
+        >
+        </span>
+      </div>
+
+      <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <input
+          type="file"
+          accept="image/*"
+          class="block w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-slate-700"
+          @change="onReceiptFileChange"
+        />
+        <button
+          type="button"
+          class="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          :disabled="receiptAnalyzing || !selectedReceiptFile"
+          @click="analyzeReceipt"
+        >
+          {{ receiptAnalyzing ? 'Analyzing...' : 'Analyze Receipt' }}
+        </button>
+      </div>
+
+      <p v-if="receiptError" class="mt-2 text-xs font-medium text-rose-600">{{ receiptError }}</p>
+
+      <div v-if="receiptResult" class="mt-4 space-y-4">
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p class="text-xs font-semibold text-slate-700">
+            {{ receiptResult.merchant || 'Unknown Merchant' }}
+            <span class="mx-1 text-slate-300">|</span>
+            {{ receiptResult.bill_date || 'Date not detected' }}
+          </p>
+          <p class="mt-1 text-[11px] text-slate-500">
+            {{ receiptResult.items?.length || 0 }} items extracted • Currency {{ receiptResult.currency || 'INR' }}
+          </p>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-200">
+          <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+            <thead class="bg-slate-50 text-slate-600">
+              <tr>
+                <th class="px-3 py-2 font-semibold">Item</th>
+                <th class="px-3 py-2 font-semibold">Category</th>
+                <th class="px-3 py-2 font-semibold">Qty</th>
+                <th class="px-3 py-2 font-semibold">Total</th>
+                <th class="px-3 py-2 font-semibold">Per Item</th>
+                <th class="px-3 py-2 font-semibold">Per Gram/ml</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 bg-white text-slate-700">
+              <tr v-for="item in receiptResult.items" :key="`receipt-${item.name}-${item.total_price}`">
+                <td class="px-3 py-2 font-medium text-slate-800">{{ item.name }}</td>
+                <td class="px-3 py-2">{{ item.category || 'Other' }}</td>
+                <td class="px-3 py-2">{{ item.quantity }}</td>
+                <td class="px-3 py-2">{{ formatCurrency(item.total_price) }}</td>
+                <td class="px-3 py-2">{{ formatCurrency(item.cost_per_item) }}</td>
+                <td class="px-3 py-2">{{ formatUnitCost(item) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid gap-3 lg:grid-cols-2">
+          <article class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+            <h3 class="text-[11px] font-bold uppercase tracking-wide text-emerald-700">Better Than Previous Bill</h3>
+            <p
+              v-if="!previousReceiptSnapshot"
+              class="mt-2 text-xs text-emerald-800"
+            >
+              Upload another bill to compare same-item costs.
+            </p>
+
+            <div v-else class="mt-2 space-y-2 text-xs text-emerald-800">
+              <p class="font-semibold text-emerald-700">Per Item Cost</p>
+              <p v-if="!receiptResult.insights?.better_per_item_items?.length">No per-item improvement found.</p>
+              <ul v-else class="space-y-2">
+                <li
+                  v-for="entry in receiptResult.insights.better_per_item_items"
+                  :key="`better-item-${entry.name}-${entry.current_cost_per_item}`"
+                  class="rounded-lg bg-white/80 px-2 py-1.5"
+                >
+                  {{ entry.name }} {{ formatCurrency(entry.current_cost_per_item) }} per item
+                  (was {{ formatCurrency(entry.previous_cost_per_item) }}, {{ entry.percent_change }}% better)
+                </li>
+              </ul>
+
+              <p class="font-semibold text-emerald-700">Unit Cost (Per Gram/ml)</p>
+              <p v-if="!receiptResult.insights?.better_unit_cost_items?.length">No unit-cost improvement found.</p>
+              <ul v-else class="space-y-2">
+                <li
+                  v-for="entry in receiptResult.insights.better_unit_cost_items"
+                  :key="`better-unit-${entry.name}-${entry.current_cost_per_unit}`"
+                  class="rounded-lg bg-white/80 px-2 py-1.5"
+                >
+                  {{ entry.name }} {{ formatCurrency(entry.current_cost_per_unit) }} {{ entry.unit_label }}
+                  (was {{ formatCurrency(entry.previous_cost_per_unit) }}, {{ entry.percent_change }}% better)
+                </li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="rounded-xl border border-rose-200 bg-rose-50 p-3">
+            <h3 class="text-[11px] font-bold uppercase tracking-wide text-rose-700">Worse Than Previous Bill</h3>
+            <p
+              v-if="!previousReceiptSnapshot"
+              class="mt-2 text-xs text-rose-800"
+            >
+              Upload another bill to compare same-item costs.
+            </p>
+
+            <div v-else class="mt-2 space-y-2 text-xs text-rose-800">
+              <p class="font-semibold text-rose-700">Per Item Cost</p>
+              <p v-if="!receiptResult.insights?.worse_per_item_items?.length">No per-item increase found.</p>
+              <ul v-else class="space-y-2">
+                <li
+                  v-for="entry in receiptResult.insights.worse_per_item_items"
+                  :key="`worse-item-${entry.name}-${entry.current_cost_per_item}`"
+                  class="rounded-lg bg-white/80 px-2 py-1.5"
+                >
+                  {{ entry.name }} {{ formatCurrency(entry.current_cost_per_item) }} per item
+                  (was {{ formatCurrency(entry.previous_cost_per_item) }}, {{ entry.percent_change }}% worse)
+                </li>
+              </ul>
+
+              <p class="font-semibold text-rose-700">Unit Cost (Per Gram/ml)</p>
+              <p v-if="!receiptResult.insights?.worse_unit_cost_items?.length">No unit-cost increase found.</p>
+              <ul v-else class="space-y-2">
+                <li
+                  v-for="entry in receiptResult.insights.worse_unit_cost_items"
+                  :key="`worse-unit-${entry.name}-${entry.current_cost_per_unit}`"
+                  class="rounded-lg bg-white/80 px-2 py-1.5"
+                >
+                  {{ entry.name }} {{ formatCurrency(entry.current_cost_per_unit) }} {{ entry.unit_label }}
+                  (was {{ formatCurrency(entry.previous_cost_per_unit) }}, {{ entry.percent_change }}% worse)
+                </li>
+              </ul>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
 
