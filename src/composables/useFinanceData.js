@@ -59,6 +59,11 @@ const realtimeStatus = ref('disconnected')
 const realtimeError = ref('')
 const backendSimulationRunning = ref(false)
 const liveMessageCount = ref(0)
+const demoScenarios = ref([])
+const activeDemoScenarioId = ref('')
+const demoScenarioLoading = ref(false)
+const demoScenarioApplying = ref(false)
+const demoScenarioError = ref('')
 
 let feedSocket = null
 let reconnectTimer = null
@@ -161,6 +166,19 @@ const expenseHints = [
 ]
 
 const incomeHints = ['credited', 'salary', 'deposit', 'received', 'refund']
+const subscriptionKeywords = [
+  'subscription',
+  'membership',
+  'netflix',
+  'spotify',
+  'prime',
+  'gym',
+  'internet',
+  'icloud',
+  'youtube',
+  'adobe',
+  'office',
+]
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-IN', {
@@ -168,6 +186,26 @@ const formatCurrency = (value) =>
     currency: 'INR',
     maximumFractionDigits: 2,
   }).format(value)
+
+const toIsoDate = (tx) => tx.occurredAt?.slice(0, 10) ?? tx.date
+
+const parseTxDate = (tx) => new Date(`${toIsoDate(tx)}T00:00:00`)
+
+const dayDiff = (left, right) => {
+  const dayMs = 1000 * 60 * 60 * 24
+  return Math.round((right.getTime() - left.getTime()) / dayMs)
+}
+
+const normalizeMerchantKey = (description) =>
+  description
+    .toLowerCase()
+    .replace(/\b(?:paid|payment|purchase|transfer|bill|invoice|amount|debit|credit)\b/g, ' ')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const containsSubscriptionHint = (description) =>
+  subscriptionKeywords.some((word) => description.toLowerCase().includes(word))
 
 const categorizeTransaction = (tx) => {
   if (tx.category) {
@@ -354,6 +392,98 @@ const setBackendSimulationState = async (state) => {
   return payload
 }
 
+const normalizeScenarioPayload = (payload) => {
+  const rawItems =
+    payload?.scenarios ?? payload?.items ?? payload?.data?.scenarios ?? payload?.data ?? []
+
+  const normalized = Array.isArray(rawItems)
+    ? rawItems
+        .map((item, index) => {
+          const id = String(item.id ?? item.scenarioId ?? item.slug ?? index)
+          const name = String(item.name ?? item.label ?? `Scenario ${index + 1}`)
+          return {
+            id,
+            name,
+            description: String(item.description ?? item.detail ?? ''),
+            running: Boolean(item.running ?? item.active ?? false),
+          }
+        })
+        .filter((item) => item.id)
+    : []
+
+  const activeIdFromPayload =
+    payload?.activeScenarioId ??
+    payload?.active_scenario_id ??
+    payload?.activeScenario ??
+    normalized.find((item) => item.running)?.id ??
+    ''
+
+  return {
+    scenarios: normalized,
+    activeId: String(activeIdFromPayload ?? ''),
+  }
+}
+
+const refreshDemoScenarios = async () => {
+  demoScenarioLoading.value = true
+  demoScenarioError.value = ''
+
+  try {
+    const response = await fetch(`${backendBaseUrl}/simulation/scenarios`)
+    if (!response.ok) {
+      throw new Error(`Scenarios HTTP ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const parsed = normalizeScenarioPayload(payload)
+
+    demoScenarios.value = parsed.scenarios
+    activeDemoScenarioId.value = parsed.activeId
+  } catch {
+    demoScenarios.value = []
+    activeDemoScenarioId.value = ''
+    demoScenarioError.value = 'Scenario catalog unavailable from backend.'
+  } finally {
+    demoScenarioLoading.value = false
+  }
+}
+
+const activateDemoScenario = async (scenarioId) => {
+  if (!scenarioId) {
+    return null
+  }
+
+  demoScenarioApplying.value = true
+  demoScenarioError.value = ''
+
+  try {
+    const response = await fetch(`${backendBaseUrl}/simulation/scenarios/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenarioId }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Activate HTTP ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const parsed = normalizeScenarioPayload(payload)
+
+    if (parsed.scenarios.length > 0) {
+      demoScenarios.value = parsed.scenarios
+    }
+
+    activeDemoScenarioId.value = parsed.activeId || String(scenarioId)
+    return payload
+  } catch {
+    demoScenarioError.value = 'Could not activate backend scenario.'
+    return null
+  } finally {
+    demoScenarioApplying.value = false
+  }
+}
+
 const ensureRealtimeConnection = () => {
   if (typeof window === 'undefined' || connectionStarted) {
     return
@@ -364,6 +494,7 @@ const ensureRealtimeConnection = () => {
   realtimeError.value = ''
 
   refreshBackendSimulationStatus()
+  refreshDemoScenarios()
 
   feedSocket = new WebSocket(backendWsUrl())
 
@@ -542,6 +673,231 @@ const monthlyTrend = computed(() => {
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value)
 })
 
+const currentMonthSummary = computed(() => {
+  const datedTransactions = profiledTransactions.value
+    .map((tx) => ({ ...tx, isoDate: toIsoDate(tx) }))
+    .filter((tx) => /^\d{4}-\d{2}-\d{2}$/.test(tx.isoDate))
+
+  if (!datedTransactions.length) {
+    return {
+      monthLabel: 'N/A',
+      daysInMonth: 30,
+      daysElapsed: 1,
+      monthIncome: 0,
+      monthExpenses: 0,
+      monthBudget: 0,
+    }
+  }
+
+  const latestIsoDate = datedTransactions
+    .map((tx) => tx.isoDate)
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1)
+  const activeMonthKey = latestIsoDate.slice(0, 7)
+  const monthDate = new Date(`${activeMonthKey}-01T00:00:00`)
+  const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate()
+  const daysElapsed = Math.max(Number(latestIsoDate.slice(8, 10)), 1)
+
+  const monthItems = datedTransactions.filter((tx) => tx.isoDate.startsWith(activeMonthKey))
+
+  const monthIncome = monthItems
+    .filter((tx) => tx.direction === 'in')
+    .reduce((sum, tx) => sum + tx.amount, 0)
+
+  const monthExpenses = monthItems
+    .filter((tx) => tx.direction === 'out')
+    .reduce((sum, tx) => sum + tx.amount, 0)
+
+  return {
+    monthLabel: monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+    daysInMonth,
+    daysElapsed,
+    monthIncome,
+    monthExpenses,
+    monthBudget: monthIncome * profile.value.budgetRatio,
+  }
+})
+
+const monthEndForecast = computed(() => {
+  const summary = currentMonthSummary.value
+  const projectedExpenses =
+    summary.daysElapsed > 0 ? (summary.monthExpenses / summary.daysElapsed) * summary.daysInMonth : 0
+  const delta = summary.monthBudget - projectedExpenses
+
+  return {
+    ...summary,
+    projectedExpenses,
+    projectedDailySpend:
+      summary.daysElapsed > 0 ? summary.monthExpenses / summary.daysElapsed : summary.monthExpenses,
+    budgetDelta: delta,
+    status: projectedExpenses <= summary.monthBudget ? 'on-track' : 'at-risk',
+    riskPercent:
+      summary.monthBudget > 0 ? Math.max((projectedExpenses / summary.monthBudget) * 100 - 100, 0) : 0,
+  }
+})
+
+const anomalySignals = computed(() => {
+  const spendingItems = profiledTransactions.value
+    .filter((tx) => tx.direction === 'out')
+    .slice()
+    .sort((a, b) => parseTxDate(a).getTime() - parseTxDate(b).getTime())
+
+  const merchantStats = new Map()
+  const categoryStats = new Map()
+  const byId = {}
+  const anomalies = []
+
+  for (const tx of spendingItems) {
+    const merchantKey = normalizeMerchantKey(tx.description) || tx.category.toLowerCase()
+    const merchant = merchantStats.get(merchantKey) ?? { count: 0, sum: 0, sumSq: 0 }
+    const category = categoryStats.get(tx.category) ?? { count: 0, sum: 0, sumSq: 0 }
+
+    const merchantMean = merchant.count > 0 ? merchant.sum / merchant.count : tx.amount
+    const merchantVariance =
+      merchant.count > 1
+        ? Math.max(merchant.sumSq / merchant.count - merchantMean * merchantMean, 0)
+        : 0
+    const merchantStd = Math.sqrt(merchantVariance)
+    const merchantSpike =
+      merchant.count >= 2 &&
+      tx.amount >= 75 &&
+      tx.amount > Math.max(merchantMean * 1.85, merchantMean + merchantStd * 2.5)
+
+    const categoryMean = category.count > 0 ? category.sum / category.count : tx.amount
+    const categoryVariance =
+      category.count > 1
+        ? Math.max(category.sumSq / category.count - categoryMean * categoryMean, 0)
+        : 0
+    const categoryStd = Math.sqrt(categoryVariance)
+    const categorySpike =
+      category.count >= 4 &&
+      tx.amount >= 100 &&
+      tx.amount > Math.max(categoryMean * 2.1, categoryMean + categoryStd * 2.8)
+
+    if (merchantSpike || categorySpike) {
+      const baseline = merchant.count >= 2 ? merchantMean : categoryMean
+      const ratio = baseline > 0 ? tx.amount / baseline : 1
+      const severity = ratio >= 2.6 ? 'high' : ratio >= 2 ? 'medium' : 'low'
+
+      const anomaly = {
+        id: tx.id,
+        description: tx.description,
+        date: toIsoDate(tx),
+        amount: tx.amount,
+        category: tx.category,
+        reason: merchantSpike ? 'merchant-spike' : 'category-spike',
+        severity,
+        ratio,
+        baseline,
+      }
+
+      anomalies.push(anomaly)
+      byId[tx.id] = anomaly
+    }
+
+    merchantStats.set(merchantKey, {
+      count: merchant.count + 1,
+      sum: merchant.sum + tx.amount,
+      sumSq: merchant.sumSq + tx.amount * tx.amount,
+    })
+
+    categoryStats.set(tx.category, {
+      count: category.count + 1,
+      sum: category.sum + tx.amount,
+      sumSq: category.sumSq + tx.amount * tx.amount,
+    })
+  }
+
+  return {
+    byId,
+    anomalies: anomalies.sort((a, b) => b.date.localeCompare(a.date)),
+  }
+})
+
+const recurringSignals = computed(() => {
+  const groups = new Map()
+
+  for (const tx of profiledTransactions.value) {
+    if (tx.direction !== 'out') {
+      continue
+    }
+
+    const key = normalizeMerchantKey(tx.description)
+    if (!key) {
+      continue
+    }
+
+    const next = groups.get(key) ?? []
+    next.push(tx)
+    groups.set(key, next)
+  }
+
+  const byId = {}
+  const recurring = []
+
+  for (const [merchantKey, items] of groups.entries()) {
+    if (items.length < 2) {
+      continue
+    }
+
+    const sorted = items.slice().sort((a, b) => parseTxDate(a).getTime() - parseTxDate(b).getTime())
+    const gaps = []
+    for (let index = 1; index < sorted.length; index += 1) {
+      gaps.push(dayDiff(parseTxDate(sorted[index - 1]), parseTxDate(sorted[index])))
+    }
+
+    const avgGap = gaps.length > 0 ? gaps.reduce((sum, value) => sum + value, 0) / gaps.length : 0
+    const avgAmount = sorted.reduce((sum, tx) => sum + tx.amount, 0) / sorted.length
+    const amountRange =
+      Math.max(...sorted.map((tx) => tx.amount)) - Math.min(...sorted.map((tx) => tx.amount))
+    const stableAmount = avgAmount > 0 ? amountRange / avgAmount < 0.35 : false
+
+    const cadence = avgGap >= 25 && avgGap <= 35 ? 'monthly' : avgGap >= 6 && avgGap <= 8 ? 'weekly' : ''
+    const subscription = sorted.some((tx) => containsSubscriptionHint(tx.description))
+    const recurringMatch = Boolean(cadence) && (stableAmount || subscription)
+
+    if (!recurringMatch) {
+      continue
+    }
+
+    const last = sorted.at(-1)
+    const nextDate = new Date(parseTxDate(last))
+    nextDate.setDate(nextDate.getDate() + Math.max(Math.round(avgGap), 1))
+
+    const signal = {
+      id: merchantKey,
+      merchant: last.description,
+      cadence,
+      subscription,
+      predictedAmount: avgAmount,
+      nextExpectedDate: nextDate.toISOString().slice(0, 10),
+      transactionIds: sorted.map((tx) => tx.id),
+    }
+
+    recurring.push(signal)
+
+    for (const tx of sorted) {
+      byId[tx.id] = {
+        cadence,
+        subscription,
+      }
+    }
+  }
+
+  return {
+    byId,
+    recurring: recurring.sort((a, b) => b.predictedAmount - a.predictedAmount),
+  }
+})
+
+const profiledTransactionsWithSignals = computed(() =>
+  profiledTransactions.value.map((tx) => ({
+    ...tx,
+    anomaly: anomalySignals.value.byId[tx.id] ?? null,
+    recurring: recurringSignals.value.byId[tx.id] ?? null,
+  })),
+)
+
 const maxTrendValue = computed(() =>
   Math.max(...monthlyTrend.value.map((item) => Math.max(item.income, item.expenses)), 1),
 )
@@ -647,6 +1003,14 @@ const financialHealthScore = computed(() => {
 const recommendations = computed(() => {
   const notes = []
 
+  if (monthEndForecast.value.status === 'at-risk') {
+    notes.push({
+      title: 'Month-end burn rate is at risk',
+      priority: 'High',
+      detail: `Projected spend is ${formatCurrency(monthEndForecast.value.projectedExpenses)} against a budget of ${formatCurrency(monthEndForecast.value.monthBudget)}. Slow variable expenses now.`,
+    })
+  }
+
   if (riskSignals.value.bucketPressure) {
     notes.push({
       title: 'Rebalance bucket allocations',
@@ -668,6 +1032,23 @@ const recommendations = computed(() => {
       title: 'Increase emergency reserve pace',
       priority: 'Medium',
       detail: `Current reserve runway is ${emergencyFundMonths.value.toFixed(1)} months. Target ${profile.value.emergencyTargetMonths} months with scheduled transfers.`,
+    })
+  }
+
+  if (anomalySignals.value.anomalies.length > 0) {
+    const topAnomaly = anomalySignals.value.anomalies[0]
+    notes.push({
+      title: 'Unusual spending spike detected',
+      priority: topAnomaly.severity === 'high' ? 'High' : 'Medium',
+      detail: `${topAnomaly.description} at ${formatCurrency(topAnomaly.amount)} is above your normal spend pattern. Confirm this charge and review merchant controls.`,
+    })
+  }
+
+  if (recurringSignals.value.recurring.length > 0) {
+    notes.push({
+      title: 'Recurring charges identified',
+      priority: 'Medium',
+      detail: `${recurringSignals.value.recurring.length} recurring merchants were detected. Shift non-essential subscriptions into a capped bucket.`,
     })
   }
 
@@ -751,6 +1132,11 @@ export const useFinanceData = () => {
     savingsRate,
     monthlyTrend,
     maxTrendValue,
+    currentMonthSummary,
+    monthEndForecast,
+    anomalySignals,
+    recurringSignals,
+    profiledTransactionsWithSignals,
     categorySummary,
     bucketAllocation,
     emergencyFundMonths,
@@ -770,6 +1156,13 @@ export const useFinanceData = () => {
     liveMessageCount,
     refreshBackendSimulationStatus,
     setBackendSimulationState,
+    demoScenarios,
+    activeDemoScenarioId,
+    demoScenarioLoading,
+    demoScenarioApplying,
+    demoScenarioError,
+    refreshDemoScenarios,
+    activateDemoScenario,
     toasts,
     dismissToast,
     formatCurrency,

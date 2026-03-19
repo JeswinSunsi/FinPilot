@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 import useFinanceData from '../composables/useFinanceData'
 
 const {
-  profiledTransactions,
+  profiledTransactionsWithSignals,
+  anomalySignals,
   editableBucketNames,
   assignTransactionBucket,
   formatCurrency,
@@ -21,7 +22,7 @@ watch(filters, (nextFilters) => {
 })
 
 const sortedTransactions = computed(() =>
-  [...profiledTransactions.value].sort((a, b) => {
+  [...profiledTransactionsWithSignals.value].sort((a, b) => {
     const left = a.occurredAt ?? `${a.date}T00:00:00Z`
     const right = b.occurredAt ?? `${b.date}T00:00:00Z`
     return right.localeCompare(left)
@@ -80,6 +81,16 @@ const saveBucketForTransaction = (bucketName) => {
 
     <section class="flex flex-col gap-3">
       <h2 class="text-sm font-bold text-slate-800 mt-2">Recent Activity</h2>
+
+      <div
+        v-if="anomalySignals.anomalies.length"
+        class="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2"
+      >
+        <p class="text-[11px] font-bold uppercase tracking-wide text-amber-700">Unusual Activity</p>
+        <p class="mt-1 text-xs text-amber-800">
+          {{ anomalySignals.anomalies.length }} potential spike{{ anomalySignals.anomalies.length > 1 ? 's' : '' }} detected in recent spending.
+        </p>
+      </div>
       
       <div
         v-for="tx in visibleTransactions"
@@ -101,6 +112,18 @@ const saveBucketForTransaction = (bucketName) => {
                 <span class="text-[10px] text-slate-500">{{ tx.date }}</span>
                 <span class="text-[10px] text-slate-300">•</span>
                 <span class="text-[10px] font-medium text-slate-500">{{ tx.bucket }}</span>
+                <span
+                  v-if="tx.anomaly"
+                  class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
+                >
+                  Spike
+                </span>
+                <span
+                  v-if="tx.recurring"
+                  class="rounded-full bg-cyan-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-cyan-700"
+                >
+                  {{ tx.recurring.subscription ? 'Subscription' : 'Recurring' }}
+                </span>
               </div>
             </div>
           </div>

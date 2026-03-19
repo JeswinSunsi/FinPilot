@@ -12,6 +12,7 @@ const {
   financialHealthScore,
   monthlyTrend,
   maxTrendValue,
+  monthEndForecast,
   recommendations,
   formatCurrency,
 } = useFinanceData()
@@ -64,6 +65,51 @@ const {
         <p class="mt-2 text-[10px] font-medium text-slate-500">Aligned with goal</p>
       </article>
     </div>
+
+    <section
+      class="rounded-2xl border p-5 shadow-sm"
+      :class="
+        monthEndForecast.status === 'at-risk'
+          ? 'border-rose-200 bg-rose-50/70'
+          : 'border-emerald-200 bg-emerald-50/70'
+      "
+    >
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Month-end forecast</p>
+          <h2 class="mt-1 text-sm font-bold text-slate-900">{{ monthEndForecast.monthLabel }}</h2>
+        </div>
+        <span
+          class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider"
+          :class="
+            monthEndForecast.status === 'at-risk'
+              ? 'bg-rose-100 text-rose-700'
+              : 'bg-emerald-100 text-emerald-700'
+          "
+        >
+          {{ monthEndForecast.status === 'at-risk' ? 'At Risk' : 'On Track' }}
+        </span>
+      </div>
+
+      <div class="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <div class="rounded-xl bg-white/80 p-3 border border-white">
+          <p class="text-slate-500">Projected spend</p>
+          <p class="mt-1 text-sm font-bold text-slate-800">{{ formatCurrency(monthEndForecast.projectedExpenses) }}</p>
+        </div>
+        <div class="rounded-xl bg-white/80 p-3 border border-white">
+          <p class="text-slate-500">Budget target</p>
+          <p class="mt-1 text-sm font-bold text-slate-800">{{ formatCurrency(monthEndForecast.monthBudget) }}</p>
+        </div>
+      </div>
+
+      <p class="mt-3 text-xs font-medium" :class="monthEndForecast.status === 'at-risk' ? 'text-rose-700' : 'text-emerald-700'">
+        {{
+          monthEndForecast.status === 'at-risk'
+            ? `Projected overrun ${formatCurrency(Math.abs(monthEndForecast.budgetDelta))}.`
+            : `Projected headroom ${formatCurrency(monthEndForecast.budgetDelta)}.`
+        }}
+      </p>
+    </section>
 
     <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
       <div class="flex items-center justify-between mb-4">
