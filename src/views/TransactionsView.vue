@@ -1,79 +1,87 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { useFinanceData } from '../composables/useFinanceData'
+import useFinanceData from '../composables/useFinanceData'
 
-const { profiledTransactions, formatCurrency } = useFinanceData()
+const {
+  profiledTransactions,
+  formatCurrency,
+} = useFinanceData()
 
 const filters = ['All', 'Income', 'Food', 'Utilities', 'Housing', 'Transport', 'Health', 'Misc']
 const activeFilter = ref('All')
 
+const sortedTransactions = computed(() =>
+  [...profiledTransactions.value].sort((a, b) => {
+    const left = a.occurredAt ?? `${a.date}T00:00:00Z`
+    const right = b.occurredAt ?? `${b.date}T00:00:00Z`
+    return right.localeCompare(left)
+  }),
+)
+
 const visibleTransactions = computed(() => {
   if (activeFilter.value === 'All') {
-    return profiledTransactions.value
+    return sortedTransactions.value
   }
 
   if (activeFilter.value === 'Income') {
-    return profiledTransactions.value.filter((tx) => tx.direction === 'in')
+    return sortedTransactions.value.filter((tx) => tx.direction === 'in')
   }
 
-  return profiledTransactions.value.filter((tx) => tx.bucket === activeFilter.value)
+  return sortedTransactions.value.filter((tx) => tx.bucket === activeFilter.value)
 })
 </script>
 
 <template>
-  <main class="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">
-    <section class="metric-card">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p class="font-display text-sm uppercase tracking-[0.16em] text-slate-500">Transaction Intelligence</p>
-          <h1 class="font-display text-3xl text-ink">Automated Categorization Feed</h1>
-          <p class="mt-2 text-sm text-slate-600">Each movement is auto-tagged by category and segregated into spending buckets.</p>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="item in filters"
-            :key="item"
-            type="button"
-            class="rounded-xl px-3 py-2 text-sm font-semibold transition"
-            :class="activeFilter === item ? 'bg-ink text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
-            @click="activeFilter = item"
-          >
-            {{ item }}
-          </button>
-        </div>
+  <main class="flex w-full flex-col gap-5 px-4 py-6">
+    <section>
+      <h1 class="text-xl font-bold tracking-tight text-slate-900">Transactions</h1>
+      <p class="mt-1 text-xs text-slate-500">Auto-categorized spending feed</p>
+      
+      <div class="mt-4 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+        <button
+          v-for="item in filters"
+          :key="item"
+          type="button"
+          class="whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-semibold transition-colors border"
+          :class="activeFilter === item ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'"
+          @click="activeFilter = item"
+        >
+          {{ item }}
+        </button>
       </div>
     </section>
 
-    <section class="metric-card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="min-w-full text-left text-sm">
-          <thead>
-            <tr class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
-              <th class="px-3 py-3">Date</th>
-              <th class="px-3 py-3">Description</th>
-              <th class="px-3 py-3">Category</th>
-              <th class="px-3 py-3">Bucket</th>
-              <th class="px-3 py-3 text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="tx in [...visibleTransactions].reverse()"
-              :key="tx.id"
-              class="border-b border-slate-100 last:border-none"
-            >
-              <td class="px-3 py-3 text-slate-600">{{ tx.date }}</td>
-              <td class="px-3 py-3 font-semibold text-slate-900">{{ tx.description }}</td>
-              <td class="px-3 py-3 text-slate-700">{{ tx.category }}</td>
-              <td class="px-3 py-3">
-                <span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{{ tx.bucket }}</span>
-              </td>
-              <td class="px-3 py-3 text-right font-semibold" :class="tx.direction === 'in' ? 'text-emerald-700' : 'text-rose-600'">
-                {{ tx.direction === 'in' ? '+' : '-' }}{{ formatCurrency(tx.amount) }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    <section class="flex flex-col gap-3">
+      <h2 class="text-sm font-bold text-slate-800 mt-2">Recent Activity</h2>
+      
+      <div
+        v-for="tx in visibleTransactions"
+        :key="tx.id"
+        class="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm border border-slate-100"
+      >
+        <div class="flex items-center gap-3">
+          <div class="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-50 text-lg border border-slate-100">
+             {{ tx.direction === 'in' ? '📈' : '🛒' }}
+          </div>
+          <div class="flex flex-col">
+            <span class="text-sm font-bold text-slate-800">{{ tx.description }}</span>
+            <div class="flex items-center gap-2 mt-0.5">
+              <span class="text-[10px] text-slate-500">{{ tx.date }}</span>
+              <span class="text-[10px] text-slate-300">•</span>
+              <span class="text-[10px] font-medium text-slate-500">{{ tx.bucket }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="text-right flex flex-col items-end">
+          <span class="text-sm font-bold" :class="tx.direction === 'in' ? 'text-emerald-600' : 'text-slate-800'">
+            {{ tx.direction === 'in' ? '+' : '-' }}{{ formatCurrency(tx.amount) }}
+          </span>
+          <span class="text-[10px] font-medium text-slate-400 mt-0.5">{{ tx.category }}</span>
+        </div>
+      </div>
+      
+      <div v-if="!visibleTransactions.length" class="py-8 text-center text-sm text-slate-500">
+        No transactions found.
       </div>
     </section>
   </main>

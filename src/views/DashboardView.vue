@@ -1,5 +1,5 @@
 <script setup>
-import { useFinanceData } from '../composables/useFinanceData'
+import useFinanceData from '../composables/useFinanceData'
 
 const {
   profile,
@@ -18,118 +18,93 @@ const {
 </script>
 
 <template>
-  <main class="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">
-    <section class="glass rounded-3xl px-5 py-6 shadow-glow sm:px-8">
-      <div class="flex flex-wrap items-center justify-between gap-4">
+  <main class="flex w-full flex-col gap-5 px-4 py-6">
+    <section class="rounded-3xl bg-gradient-to-br from-cyan-600 to-blue-700 p-6 text-white shadow-lg">
+      <div class="flex items-center justify-between">
         <div>
-          <p class="font-display text-sm uppercase tracking-[0.16em] text-slate-500">AI Financial Companion</p>
-          <h1 class="font-display text-3xl text-ink sm:text-4xl">Financial Command Center</h1>
-          <p class="mt-2 max-w-xl text-sm text-slate-600 sm:text-base">
-            Intelligent budgeting, automated categorization, risk prediction, and saving opportunities.
-          </p>
+          <p class="text-xs font-medium text-cyan-100 uppercase tracking-wider">Net Flow</p>
+          <h1 class="mt-1 font-display text-4xl font-bold">{{ formatCurrency(netFlow) }}</h1>
+        </div>
+        <div class="h-12 w-12 rounded-full bg-white/20 p-2 backdrop-blur-sm">
+          <svg class="h-full w-full text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+      </div>
+      <div class="mt-6 flex items-center justify-between border-t border-white/20 pt-4 text-sm font-medium">
+        <div class="flex flex-col">
+          <span class="text-cyan-100">Income</span>
+          <span>{{ formatCurrency(totalIncome) }}</span>
+        </div>
+        <div class="flex flex-col text-right">
+          <span class="text-cyan-100">Expenses</span>
+          <span>{{ formatCurrency(totalExpenses) }}</span>
         </div>
       </div>
     </section>
 
-    <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <article class="metric-card">
-        <p class="text-xs uppercase tracking-wide text-slate-500">Net Flow</p>
-        <p class="mt-2 font-display text-3xl text-ink">{{ formatCurrency(netFlow) }}</p>
-        <p class="mt-2 text-xs text-emerald-700">Income {{ formatCurrency(totalIncome) }} | Expenses {{ formatCurrency(totalExpenses) }}</p>
-      </article>
-      <article class="metric-card">
-        <p class="text-xs uppercase tracking-wide text-slate-500">Budget Utilization</p>
-        <p class="mt-2 font-display text-3xl text-ink">{{ budgetUsedPercent.toFixed(0) }}%</p>
-        <div class="mt-3 h-2 rounded-full bg-slate-200">
+    <div class="grid grid-cols-2 gap-4">
+      <article class="rounded-2xl bg-white p-4 shadow-sm border border-slate-100 text-center">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Budget</p>
+        <p class="mt-2 font-display text-2xl font-semibold text-slate-800">{{ budgetUsedPercent.toFixed(0) }}%</p>
+        <div class="mx-auto mt-3 h-1.5 w-full rounded-full bg-slate-100">
           <div class="h-full rounded-full bg-cyan-600" :style="{ width: `${budgetUsedPercent}%` }"></div>
         </div>
-        <p class="mt-2 text-xs text-slate-600">Budget cap {{ formatCurrency(budgetLimit) }}</p>
+        <p class="mt-2 text-[10px] font-medium text-slate-500">Cap {{ formatCurrency(budgetLimit) }}</p>
       </article>
-      <article class="metric-card">
-        <p class="text-xs uppercase tracking-wide text-slate-500">Savings Rate</p>
-        <p class="mt-2 font-display text-3xl text-ink">{{ savingsRate.toFixed(1) }}%</p>
-        <p class="mt-2 text-xs text-slate-600">Auto-reserve plan is profile aligned</p>
-      </article>
-      <article class="metric-card">
-        <p class="text-xs uppercase tracking-wide text-slate-500">Health Score</p>
-        <div class="mt-2 flex items-center justify-between">
-          <p class="font-display text-3xl text-ink">{{ financialHealthScore }}</p>
-          <div
-            class="grid h-14 w-14 place-items-center rounded-full text-xs font-bold text-slate-700"
-            :style="{ background: `conic-gradient(#0891b2 ${financialHealthScore}%, #e2e8f0 ${financialHealthScore}% 100%)` }"
-          >
-            <span class="grid h-10 w-10 place-items-center rounded-full bg-white">AI</span>
-          </div>
+
+      <article class="rounded-2xl bg-white p-4 shadow-sm border border-slate-100 text-center">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Savings Rate</p>
+        <p class="mt-2 font-display text-2xl font-semibold text-slate-800">{{ savingsRate.toFixed(1) }}%</p>
+        <div class="mx-auto mt-2 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
         </div>
-        <p class="mt-2 text-xs text-slate-600">Budget + bucket + reserve diagnostics</p>
+        <p class="mt-2 text-[10px] font-medium text-slate-500">Aligned with goal</p>
       </article>
+    </div>
+
+    <section class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-bold text-slate-800">Health Score</h2>
+        <div class="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-700 uppercase">Diagnostics</div>
+      </div>
+      <div class="flex items-center gap-4">
+        <div
+          class="relative grid h-16 w-16 place-items-center rounded-full text-xs font-bold shadow-inner"
+          :style="{ background: `conic-gradient(#0891b2 ${financialHealthScore}%, #f1f5f9 ${financialHealthScore}% 100%)` }"
+        >
+          <span class="grid h-12 w-12 place-items-center rounded-full bg-white text-lg">{{ financialHealthScore }}</span>
+        </div>
+        <p class="flex-1 text-xs text-slate-500 font-medium">
+          Your budget limits, buckets, and reserve strategies look great! Keep optimizing.
+        </p>
+      </div>
     </section>
 
-    <section class="grid gap-4 xl:grid-cols-3">
-      <article class="metric-card xl:col-span-2">
+    <section class="mb-4 rounded-2xl bg-white p-5 shadow-sm border border-slate-100 space-y-4">
         <div class="flex items-center justify-between">
-          <h2 class="font-display text-xl text-ink">Spending Trends</h2>
-          <p class="text-xs text-slate-500">Income vs expense by month</p>
+          <h2 class="text-sm font-bold text-slate-800">Spending Trends</h2>
+          <button class="text-[10px] font-bold uppercase text-cyan-600">See All</button>
         </div>
-        <div class="mt-5 grid grid-cols-3 gap-3">
+        <div class="space-y-3">
           <div
             v-for="month in monthlyTrend"
             :key="month.label"
-            class="rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200"
+            class="flex items-center gap-3 text-xs"
           >
-            <p class="text-xs font-semibold uppercase text-slate-500">{{ month.label }}</p>
-            <div class="mt-3 space-y-2">
-              <div>
-                <div class="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Income</span><span>{{ formatCurrency(month.income) }}</span>
-                </div>
-                <div class="h-2 rounded-full bg-slate-200">
-                  <div class="h-full rounded-full bg-emerald-500" :style="{ width: `${(month.income / maxTrendValue) * 100}%` }"></div>
-                </div>
+            <p class="w-8 font-semibold text-slate-500">{{ month.label }}</p>
+            <div class="flex-1 space-y-1.5">
+              <div class="flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <div class="bg-emerald-500" :style="{ width: `${(month.income / maxTrendValue) * 100}%` }"></div>
               </div>
-              <div>
-                <div class="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Expense</span><span>{{ formatCurrency(month.expenses) }}</span>
-                </div>
-                <div class="h-2 rounded-full bg-slate-200">
-                  <div class="h-full rounded-full bg-rose-500" :style="{ width: `${(month.expenses / maxTrendValue) * 100}%` }"></div>
-                </div>
+              <div class="flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <div class="bg-rose-500" :style="{ width: `${(month.expenses / maxTrendValue) * 100}%` }"></div>
               </div>
             </div>
           </div>
         </div>
-      </article>
-
-      <article class="metric-card">
-        <div class="flex items-center justify-between">
-          <h2 class="font-display text-xl text-ink">Top Recommendations</h2>
-          <RouterLink to="/insights" class="text-xs font-semibold text-cyan-700">View all</RouterLink>
-        </div>
-        <div class="mt-4 space-y-3">
-          <div
-            v-for="item in recommendations.slice(0, 3)"
-            :key="item.title"
-            class="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <h3 class="font-semibold text-slate-900">{{ item.title }}</h3>
-              <span
-                class="rounded-full px-2 py-1 text-xs font-semibold"
-                :class="
-                  item.priority === 'High'
-                    ? 'bg-red-100 text-red-700'
-                    : item.priority === 'Medium'
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-emerald-100 text-emerald-700'
-                "
-              >
-                {{ item.priority }}
-              </span>
-            </div>
-            <p class="mt-2 text-sm text-slate-600">{{ item.detail }}</p>
-          </div>
-        </div>
-      </article>
     </section>
   </main>
 </template>

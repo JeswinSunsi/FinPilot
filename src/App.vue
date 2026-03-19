@@ -4,51 +4,41 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 const route = useRoute()
 
 const navItems = [
-  { label: 'Dashboard', path: '/' },
-  { label: 'Transactions', path: '/transactions' },
-  { label: 'Buckets', path: '/buckets' },
-  { label: 'Insights', path: '/insights' },
+  { label: 'Dashboard', path: '/', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>' },
+  { label: 'Transactions', path: '/transactions', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>' },
+  { label: 'Buckets', path: '/buckets', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>' },
+  { label: 'Insights', path: '/insights', icon: '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>' },
 ]
 
 const isActive = (path) => route.path === path
 </script>
 
 <template>
-  <div class="relative min-h-screen overflow-hidden bg-gradient-to-b from-skyline via-slate-100 to-white pb-24">
-    <div class="pointer-events-none absolute -left-20 top-0 h-80 w-80 rounded-full bg-cyan-200/45 blur-3xl"></div>
-    <div class="pointer-events-none absolute -right-16 top-56 h-72 w-72 rounded-full bg-emerald-200/50 blur-3xl"></div>
-
-    <header class="sticky top-0 z-20 border-b border-white/30 bg-white/75 backdrop-blur-lg">
-      <div class="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
+  <div class="relative mx-auto min-h-screen w-full max-w-md overflow-hidden bg-slate-50 pb-20 shadow-2xl sm:border-x sm:border-slate-200">
+    <header class="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-4 pt-8 backdrop-blur-md">
+      <div class="flex items-center justify-between">
         <div>
-          <p class="font-display text-lg text-ink">FinPilot AI</p>
-          <p class="text-xs text-slate-500">Full Financial Companion</p>
+          <h1 class="font-display text-xl font-bold tracking-tight text-slate-900">FinPilot</h1>
+          <p class="text-xs font-medium text-slate-500">Good Morning</p>
         </div>
-        <nav class="hidden gap-2 md:flex">
-          <RouterLink
-            v-for="item in navItems"
-            :key="item.path"
-            :to="item.path"
-            class="rounded-xl px-3 py-2 text-sm font-semibold transition"
-            :class="isActive(item.path) ? 'bg-ink text-white' : 'text-slate-700 hover:bg-slate-200'"
-          >
-            {{ item.label }}
-          </RouterLink>
-        </nav>
+        <div class="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-600 shadow-sm ring-1 ring-slate-200">
+          <span class="text-sm font-bold">FP</span>
+        </div>
       </div>
     </header>
 
     <RouterView />
 
-    <nav class="fixed inset-x-0 bottom-3 z-20 mx-auto flex w-[min(96%,30rem)] items-center justify-between rounded-2xl border border-white/50 bg-white/85 px-2 py-2 shadow-glow backdrop-blur-lg md:hidden">
+    <nav class="fixed bottom-0 z-30 flex w-full max-w-md items-center justify-around border-t border-slate-200 bg-white pb-safe pt-2 sm:px-0 px-2 pb-6">
       <RouterLink
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        class="rounded-xl px-3 py-2 text-xs font-semibold transition"
-        :class="isActive(item.path) ? 'bg-ink text-white' : 'text-slate-600'"
+        class="flex w-16 flex-col items-center gap-1 rounded-xl p-2 transition-colors"
+        :class="isActive(item.path) ? 'text-cyan-600' : 'text-slate-400 hover:text-slate-600'"
       >
-        {{ item.label }}
+        <span v-html="item.icon" class="mb-0.5"></span>
+        <span class="text-[10px] font-semibold tracking-wide">{{ item.label }}</span>
       </RouterLink>
     </nav>
   </div>

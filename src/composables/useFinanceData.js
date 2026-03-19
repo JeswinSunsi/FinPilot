@@ -50,6 +50,21 @@ const profiles = {
 
 const selectedProfile = ref('professional')
 
+const backendBaseUrl = (import.meta.env.VITE_SMS_BACKEND_BASE_URL ?? 'http://127.0.0.1:8010').replace(
+  /\/$/,
+  '',
+)
+
+const realtimeStatus = ref('disconnected')
+const realtimeError = ref('')
+const backendSimulationRunning = ref(false)
+const liveMessageCount = ref(0)
+
+let feedSocket = null
+let reconnectTimer = null
+let connectionStarted = false
+const seenLiveIds = new Set()
+
 const transactions = ref([
   { id: 1, date: '2026-01-04', description: 'Payroll Deposit', amount: 5400, direction: 'in' },
   { id: 2, date: '2026-01-06', description: 'Rent Transfer', amount: 1720, direction: 'out' },
@@ -70,6 +85,16 @@ const transactions = ref([
   { id: 17, date: '2026-03-17', description: 'Bookstore', amount: 64, direction: 'out' },
 ])
 
+const simulationMessages = [
+  'Paid $18.50 for coffee at Central Cafe',
+  'UPI debit 1290 to FreshMart grocery store',
+  'Uber ride charged $24.30',
+  'Electricity bill paid 3400',
+  'Salary credited 5400',
+  'Pharmacy purchase amount 45',
+  'Netflix subscription 16.99',
+]
+
 const categoryRules = {
   Housing: ['rent', 'mortgage', 'lease', 'apartment'],
   Transport: ['metro', 'fuel', 'transport', 'uber', 'taxi', 'bus'],
@@ -89,6 +114,33 @@ const bucketByCategory = {
   Other: 'Misc',
 }
 
+const backendBucketToCategory = {
+  Groceries: 'Food',
+  'Food & Dining': 'Food',
+  Transport: 'Transport',
+  Shopping: 'Lifestyle',
+  'Bills & Utilities': 'Utilities',
+  Health: 'Health',
+  Entertainment: 'Lifestyle',
+  Investments: 'Other',
+  'Cash Withdrawal': 'Other',
+  Miscellaneous: 'Other',
+}
+
+const expenseHints = [
+  'paid',
+  'purchase',
+  'debit',
+  'charged',
+  'spent',
+  'upi',
+  'bill',
+  'subscription',
+  'transfer to',
+]
+
+const incomeHints = ['credited', 'salary', 'deposit', 'received', 'refund']
+
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -97,6 +149,10 @@ const formatCurrency = (value) =>
   }).format(value)
 
 const categorizeTransaction = (tx) => {
+  if (tx.category) {
+    return tx.category
+  }
+
   if (tx.direction === 'in') {
     return 'Income'
   }
@@ -112,15 +168,246 @@ const categorizeTransaction = (tx) => {
   return 'Other'
 }
 
+const findAmountInText = (text) => {
+  const normalized = text.replace(/,/g, '')
+  const match = normalized.match(/(?:[$€£]|rs\.?|inr)?\s*(\d+(?:\.\d{1,2})?)/i)
+
+  if (!match) {
+    return 0
+  }
+
+  return Number.parseFloat(match[1])
+}
+
+const inferDirectionFromMessage = (text) => {
+  const lower = text.toLowerCase()
+
+  if (incomeHints.some((hint) => lower.includes(hint))) {
+    return 'in'
+  }
+
+  if (expenseHints.some((hint) => lower.includes(hint))) {
+    return 'out'
+  }
+
+  return 'out'
+}
+
+const normalizeMessageDescription = (text) =>
+  text
+    .replace(/\s+/g, ' ')
+    .replace(/\b(?:usd|inr|rs\.?|upi)\b/gi, '')
+    .trim()
+
+const nextTransactionId = () =>
+  transactions.value.reduce((maxId, tx) => Math.max(maxId, tx.id), 0) + 1
+
+const parseMessagesToTransactions = (rawMessages, options = {}) => {
+  const { includeIncome = true } = options
+  const lines = Array.isArray(rawMessages)
+    ? rawMessages
+    : rawMessages
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+  const baseDate = new Date('2026-03-18')
+  let idCursor = nextTransactionId()
+
+  return lines
+    .map((line, index) => {
+      const amount = findAmountInText(line)
+      if (!amount) {
+        return null
+      }
+
+      const direction = inferDirectionFromMessage(line)
+      if (!includeIncome && direction === 'in') {
+        return null
+      }
+
+      const txDate = new Date(baseDate)
+      txDate.setDate(baseDate.getDate() - index)
+
+      return {
+        id: idCursor++,
+        date: txDate.toISOString().slice(0, 10),
+        description: normalizeMessageDescription(line),
+        amount,
+        direction,
+        source: 'message-scan',
+      }
+    })
+    .filter(Boolean)
+}
+
+const ingestMessages = (rawMessages, options = {}) => {
+  const parsed = parseMessagesToTransactions(rawMessages, options)
+
+  if (parsed.length > 0) {
+    transactions.value.push(...parsed)
+  }
+
+  return parsed
+}
+
+const runExpenseSimulation = () => ingestMessages(simulationMessages, { includeIncome: false })
+
+const backendWsUrl = () => {
+  const url = new URL(backendBaseUrl)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.pathname = '/ws/messages'
+  return url.toString()
+}
+
+const toLiveTransaction = (item) => {
+  const fallbackId = `${item.transaction_id ?? ''}-${item.timestamp ?? Date.now()}`
+  const id = `live-${item.id ?? fallbackId}`
+
+  return {
+    id,
+    date: (item.timestamp ?? new Date().toISOString()).slice(0, 10),
+    description: item.message ?? `Card spend at ${item.merchant ?? 'merchant'}`,
+    amount: Number(item.amount) || 0,
+    direction: 'out',
+    source: 'backend-live',
+    occurredAt: item.timestamp ?? new Date().toISOString(),
+    category: backendBucketToCategory[item.bucket] ?? 'Other',
+    bucket: bucketByCategory[backendBucketToCategory[item.bucket] ?? 'Other'] ?? 'Misc',
+    backendBucket: item.bucket ?? 'Miscellaneous',
+    merchant: item.merchant ?? '',
+    transactionId: item.transaction_id ?? '',
+  }
+}
+
+const addLiveTransaction = (item) => {
+  const tx = toLiveTransaction(item)
+
+  if (seenLiveIds.has(tx.id)) {
+    return false
+  }
+
+  seenLiveIds.add(tx.id)
+  transactions.value.push(tx)
+  liveMessageCount.value += 1
+  return true
+}
+
+const ingestHistoryPacket = (items) => {
+  const sortedItems = [...items].sort((a, b) =>
+    String(a.timestamp ?? '').localeCompare(String(b.timestamp ?? '')),
+  )
+
+  for (const item of sortedItems) {
+    addLiveTransaction(item)
+  }
+}
+
+const refreshBackendSimulationStatus = async () => {
+  try {
+    const response = await fetch(`${backendBaseUrl}/simulation/status`)
+    if (!response.ok) {
+      throw new Error(`Status HTTP ${response.status}`)
+    }
+
+    const payload = await response.json()
+    backendSimulationRunning.value = Boolean(payload.running)
+  } catch {
+    backendSimulationRunning.value = false
+  }
+}
+
+const setBackendSimulationState = async (state) => {
+  const response = await fetch(`${backendBaseUrl}/simulation/control`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Control HTTP ${response.status}`)
+  }
+
+  const payload = await response.json()
+  backendSimulationRunning.value = Boolean(payload.running)
+  return payload
+}
+
+const ensureRealtimeConnection = () => {
+  if (typeof window === 'undefined' || connectionStarted) {
+    return
+  }
+
+  connectionStarted = true
+  realtimeStatus.value = 'connecting'
+  realtimeError.value = ''
+
+  refreshBackendSimulationStatus()
+
+  feedSocket = new WebSocket(backendWsUrl())
+
+  feedSocket.onopen = () => {
+    realtimeStatus.value = 'connected'
+    realtimeError.value = ''
+  }
+
+  feedSocket.onmessage = (event) => {
+    try {
+      const packet = JSON.parse(event.data)
+
+      if (packet.type === 'history' && Array.isArray(packet.messages)) {
+        ingestHistoryPacket(packet.messages)
+        return
+      }
+
+      if (packet.type === 'message' && packet.data) {
+        addLiveTransaction(packet.data)
+      }
+    } catch {
+      realtimeError.value = 'Live feed packet parse failed.'
+    }
+  }
+
+  feedSocket.onerror = () => {
+    realtimeStatus.value = 'error'
+    realtimeError.value = 'Unable to connect to backend live feed.'
+  }
+
+  feedSocket.onclose = () => {
+    realtimeStatus.value = 'disconnected'
+    connectionStarted = false
+
+    if (reconnectTimer) {
+      window.clearTimeout(reconnectTimer)
+    }
+
+    reconnectTimer = window.setTimeout(() => {
+      ensureRealtimeConnection()
+    }, 2000)
+  }
+}
+
 const profile = computed(() => profiles[selectedProfile.value])
 
 const profiledTransactions = computed(() =>
   transactions.value.map((tx) => {
+    if (tx.direction === 'in') {
+      return {
+        ...tx,
+        category: tx.category ?? 'Income',
+        bucket: tx.bucket ?? 'Income',
+      }
+    }
+
+    if (tx.category && tx.bucket) {
+      return tx
+    }
+
     const category = categorizeTransaction(tx)
     return {
       ...tx,
       category,
-      bucket: tx.direction === 'in' ? 'Income' : bucketByCategory[category] ?? 'Misc',
+      bucket: bucketByCategory[category] ?? 'Misc',
     }
   }),
 )
@@ -314,29 +601,45 @@ const bucketColor = {
   Savings: 'bg-lime-600',
 }
 
-export const useFinanceData = () => ({
-  profiles,
-  selectedProfile,
-  profile,
-  transactions,
-  profiledTransactions,
-  totalIncome,
-  totalExpenses,
-  budgetLimit,
-  budgetUsedPercent,
-  netFlow,
-  savingsRate,
-  monthlyTrend,
-  maxTrendValue,
-  categorySummary,
-  bucketAllocation,
-  emergencyFundMonths,
-  riskSignals,
-  financialHealthScore,
-  recommendations,
-  opportunities,
-  benefitPoints,
-  categoryColor,
-  bucketColor,
-  formatCurrency,
-})
+export const useFinanceData = () => {
+  ensureRealtimeConnection()
+
+  return {
+    profiles,
+    selectedProfile,
+    profile,
+    transactions,
+    simulationMessages,
+    profiledTransactions,
+    totalIncome,
+    totalExpenses,
+    budgetLimit,
+    budgetUsedPercent,
+    netFlow,
+    savingsRate,
+    monthlyTrend,
+    maxTrendValue,
+    categorySummary,
+    bucketAllocation,
+    emergencyFundMonths,
+    riskSignals,
+    financialHealthScore,
+    recommendations,
+    opportunities,
+    benefitPoints,
+    categoryColor,
+    bucketColor,
+    parseMessagesToTransactions,
+    ingestMessages,
+    runExpenseSimulation,
+    realtimeStatus,
+    realtimeError,
+    backendSimulationRunning,
+    liveMessageCount,
+    refreshBackendSimulationStatus,
+    setBackendSimulationState,
+    formatCurrency,
+  }
+}
+
+export default useFinanceData
