@@ -37,15 +37,11 @@ I’m a cybersecurity student at SRM Institute of Science and Technology (SRMIST
 - Capture The Flag (CTF) challenges  
 - Secure coding practices  
 
----
 
 ### 🌐 Connect with Me
 
 - GitHub: https://github.com/yourusername  
 - LinkedIn: https://linkedin.com/in/yourprofile  
-- Portfolio/Blog: https://yourwebsite.com  
 
-
-### ⚡ Fun Note
 
 > Breaking systems to understand them better — and rebuilding them stronger.
