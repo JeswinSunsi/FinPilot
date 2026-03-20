@@ -11,7 +11,6 @@
 
 I’m a cybersecurity student at SRM Institute of Science and Technology (SRMIST) with a strong interest in ethical hacking, network security, and digital defense. I’m passionate about understanding how systems break — and how to secure them.
 
----
 
 ### 🔐 Areas of Interest
 
@@ -21,7 +20,6 @@ I’m a cybersecurity student at SRM Institute of Science and Technology (SRMIST
 - Cryptography & Secure Communications  
 - Digital Forensics  
 
----
 
 ### 🧰 Skills & Tools
 
@@ -31,7 +29,6 @@ I’m a cybersecurity student at SRM Institute of Science and Technology (SRMIST
 - **Systems:** Linux (Kali Linux, Ubuntu)  
 - **Other:** Git, basic scripting & automation  
 
----
 
 ### 📚 Currently Learning
 
@@ -48,7 +45,6 @@ I’m a cybersecurity student at SRM Institute of Science and Technology (SRMIST
 - LinkedIn: https://linkedin.com/in/yourprofile  
 - Portfolio/Blog: https://yourwebsite.com  
 
----
 
 ### ⚡ Fun Note
 
